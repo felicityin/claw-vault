@@ -1,0 +1,60 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "com.clawup/claw-vault",
+  "description": "Clawup agent wallet MCP server backed by Privy. Creates policy-bound agent wallets and exposes constrained wallet tools for hosted agents.",
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "clawup/claw-vault",
+      "version": "0.1.0",
+      "transport": {
+        "type": "http"
+      },
+      "environmentVariables": [
+        {
+          "name": "PRIVY_APP_ID",
+          "description": "Privy app ID from the Privy Dashboard",
+          "isRequired": true,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "PRIVY_APP_SECRET",
+          "description": "Privy app secret from the Privy Dashboard",
+          "isRequired": true,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "VAULT_MCP_API_KEY",
+          "description": "API key required for HTTP MCP calls",
+          "isRequired": true,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "VAULT_TRANSPORT",
+          "description": "Set to http for ClawUp deployment",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "VAULT_ALLOWED_CAIP2",
+          "description": "Comma-separated CAIP-2 chain allowlist for transaction submission",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "VAULT_WALLET_STORE",
+          "description": "Path to the local agent wallet mapping JSON store",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}
