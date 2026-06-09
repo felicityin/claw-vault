@@ -1,9 +1,8 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-use tokio::sync::Mutex;
+use sqlx::Row;
+use sqlx::mysql::{MySqlPool, MySqlPoolOptions};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentWallet {
@@ -16,56 +15,111 @@ pub struct AgentWallet {
     pub metadata: serde_json::Value,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct StoreData {
-    wallets: BTreeMap<String, AgentWallet>,
-}
-
+#[derive(Clone)]
 pub struct WalletStore {
-    path: PathBuf,
-    data: Mutex<StoreData>,
+    pool: MySqlPool,
 }
 
 impl WalletStore {
-    pub async fn load(path: PathBuf) -> Result<Self> {
-        let data = if tokio::fs::try_exists(&path).await? {
-            let bytes = tokio::fs::read(&path).await?;
-            serde_json::from_slice(&bytes)?
-        } else {
-            StoreData::default()
-        };
+    pub async fn connect(database_url: &str) -> Result<Self> {
+        let max_connections = std::env::var("VAULT_DB_MAX_CONNECTIONS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(5);
 
-        Ok(Self {
-            path,
-            data: Mutex::new(data),
-        })
+        let pool = MySqlPoolOptions::new()
+            .max_connections(max_connections)
+            .connect(database_url)
+            .await?;
+        let store = Self { pool };
+        store.migrate().await?;
+        Ok(store)
     }
 
-    pub async fn get(&self, agent_id: &str) -> Option<AgentWallet> {
-        self.data.lock().await.wallets.get(agent_id).cloned()
+    async fn migrate(&self) -> Result<()> {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS agent_wallets (
+                agent_id VARCHAR(128) NOT NULL PRIMARY KEY,
+                wallet_id VARCHAR(191) NOT NULL,
+                address VARCHAR(191) NOT NULL,
+                chain_type VARCHAR(64) NOT NULL,
+                policy_ids JSON NOT NULL,
+                metadata JSON NOT NULL,
+                created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+                UNIQUE KEY uniq_wallet_id (wallet_id),
+                KEY idx_chain_type (chain_type)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
-    pub async fn list(&self) -> Vec<AgentWallet> {
-        self.data.lock().await.wallets.values().cloned().collect()
+    pub async fn get(&self, agent_id: &str) -> Result<Option<AgentWallet>> {
+        let row = sqlx::query(
+            r#"
+            SELECT agent_id, wallet_id, address, chain_type, policy_ids, metadata, created_at
+            FROM agent_wallets
+            WHERE agent_id = ?
+            "#,
+        )
+        .bind(agent_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(row_to_wallet).transpose()
+    }
+
+    pub async fn list(&self) -> Result<Vec<AgentWallet>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT agent_id, wallet_id, address, chain_type, policy_ids, metadata, created_at
+            FROM agent_wallets
+            ORDER BY created_at DESC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(row_to_wallet).collect()
     }
 
     pub async fn insert(&self, wallet: AgentWallet) -> Result<()> {
-        let snapshot = {
-            let mut data = self.data.lock().await;
-            data.wallets.insert(wallet.agent_id.clone(), wallet);
-            serde_json::to_vec_pretty(&*data)?
-        };
-        write_atomic(&self.path, &snapshot).await
+        sqlx::query(
+            r#"
+            INSERT INTO agent_wallets (
+                agent_id, wallet_id, address, chain_type, policy_ids, metadata, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&wallet.agent_id)
+        .bind(&wallet.wallet_id)
+        .bind(&wallet.address)
+        .bind(&wallet.chain_type)
+        .bind(serde_json::to_string(&wallet.policy_ids)?)
+        .bind(serde_json::to_string(&wallet.metadata)?)
+        .bind(wallet.created_at.naive_utc())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 }
 
-async fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
+fn row_to_wallet(row: sqlx::mysql::MySqlRow) -> Result<AgentWallet> {
+    let policy_ids: String = row.try_get("policy_ids")?;
+    let metadata: String = row.try_get("metadata")?;
+    let created_at: chrono::NaiveDateTime = row.try_get("created_at")?;
 
-    let tmp = path.with_extension("tmp");
-    tokio::fs::write(&tmp, bytes).await?;
-    tokio::fs::rename(tmp, path).await?;
-    Ok(())
+    Ok(AgentWallet {
+        agent_id: row.try_get("agent_id")?,
+        wallet_id: row.try_get("wallet_id")?,
+        address: row.try_get("address")?,
+        chain_type: row.try_get("chain_type")?,
+        policy_ids: serde_json::from_str(&policy_ids)?,
+        metadata: serde_json::from_str(&metadata)?,
+        created_at: DateTime::<Utc>::from_naive_utc_and_offset(created_at, Utc),
+    })
 }

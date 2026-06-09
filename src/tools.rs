@@ -126,7 +126,7 @@ impl ToolService {
     async fn create_agent_wallet(&self, args: Value) -> Result<Value> {
         let args: CreateAgentWalletArgs = serde_json::from_value(args)?;
         validate_agent_id(&args.agent_id)?;
-        if self.store.get(&args.agent_id).await.is_some() {
+        if self.store.get(&args.agent_id).await?.is_some() {
             return Err(anyhow!("agent_id already has a wallet binding"));
         }
 
@@ -189,7 +189,7 @@ impl ToolService {
 
     async fn list_agent_wallets(&self, args: Value) -> Result<Value> {
         let args: ListAgentWalletsArgs = serde_json::from_value(args)?;
-        let mut wallets = self.store.list().await;
+        let mut wallets = self.store.list().await?;
         if let Some(chain_type) = args.chain_type {
             wallets.retain(|wallet| wallet.chain_type == chain_type);
         }
@@ -290,7 +290,7 @@ impl ToolService {
         validate_agent_id(agent_id)?;
         self.store
             .get(agent_id)
-            .await
+            .await?
             .ok_or_else(|| anyhow!("no wallet binding found for agent_id"))
     }
 }

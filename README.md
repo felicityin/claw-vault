@@ -2,7 +2,7 @@
 
 Claw Vault is a Rust MCP server for Clawup agent wallets backed by Privy.
 
-It exposes a constrained set of agent-facing wallet tools instead of the full Privy admin surface. Wallet creation requires a policy, transactions are validated before calling Privy, and agent-to-wallet bindings are stored locally by default.
+It exposes a constrained set of agent-facing wallet tools instead of the full Privy admin surface. Wallet creation requires a policy, transactions are validated before calling Privy, and agent-to-wallet bindings are stored in MySQL.
 
 ## Tools
 
@@ -21,19 +21,33 @@ Required:
 ```sh
 export PRIVY_APP_ID=...
 export PRIVY_APP_SECRET=...
+export VAULT_DATABASE_URL=mysql://vault_user:vault_password@127.0.0.1:3306/claw_vault
 ```
 
 Optional:
 
 ```sh
 export PRIVY_API_BASE_URL=https://api.privy.io/v1
-export VAULT_WALLET_STORE=./data/agent-wallets.json
 export VAULT_ALLOWED_CAIP2=eip155:8453,eip155:11155111
 export VAULT_DEFAULT_MAX_WEI=50000000000000000
 export VAULT_TRANSPORT=stdio
 export VAULT_HTTP_BIND=0.0.0.0:8080
 export VAULT_MCP_API_KEY=change-me
+export VAULT_DB_MAX_CONNECTIONS=5
 ```
+
+## MySQL
+
+Create a database and user before starting the server:
+
+```sql
+CREATE DATABASE claw_vault CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'vault_user'@'%' IDENTIFIED BY 'vault_password';
+GRANT ALL PRIVILEGES ON claw_vault.* TO 'vault_user'@'%';
+FLUSH PRIVILEGES;
+```
+
+The server automatically creates the `agent_wallets` table on startup. In production, manage schema changes with your normal migration system and give the runtime user only the privileges it needs.
 
 ## Local stdio
 
@@ -49,6 +63,7 @@ Start the HTTP MCP server locally:
 ```sh
 export PRIVY_APP_ID=...
 export PRIVY_APP_SECRET=...
+export VAULT_DATABASE_URL=mysql://vault_user:vault_password@127.0.0.1:3306/claw_vault
 export VAULT_TRANSPORT=http
 export VAULT_HTTP_BIND=127.0.0.1:8080
 export VAULT_MCP_API_KEY=dev-secret
@@ -88,7 +103,7 @@ curl \
   http://127.0.0.1:8080/mcp
 ```
 
-This creates a Privy policy first, then creates a Privy wallet bound to that policy. The local binding is stored in `data/agent-wallets.json` unless `VAULT_WALLET_STORE` is set.
+This creates a Privy policy first, then creates a Privy wallet bound to that policy. The binding is stored in the MySQL `agent_wallets` table configured by `VAULT_DATABASE_URL`.
 
 Create an agent wallet with an existing Privy policy:
 
@@ -163,6 +178,7 @@ target/release/claw-vault
 ```sh
 export PRIVY_APP_ID=...
 export PRIVY_APP_SECRET=...
+export VAULT_DATABASE_URL=mysql://vault_user:vault_password@127.0.0.1:3306/claw_vault
 export VAULT_TRANSPORT=http
 export VAULT_HTTP_BIND=127.0.0.1:8080
 export VAULT_MCP_API_KEY=<generated-api-key>

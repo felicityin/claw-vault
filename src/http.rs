@@ -23,9 +23,7 @@ pub async fn serve_http(service: ToolService) -> Result<()> {
     let addr: SocketAddr = bind.parse()?;
     let state = HttpState {
         dispatcher: Arc::new(McpDispatcher::new(service)),
-        api_key: env::var("VAULT_MCP_API_KEY")
-            .ok()
-            .filter(|v| !v.is_empty()),
+        api_key: env::var("VAULT_MCP_API_KEY").ok().filter(|v| !v.is_empty()),
     };
 
     let cors = CorsLayer::new()

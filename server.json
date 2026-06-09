@@ -27,6 +27,13 @@
           "isSecret": true
         },
         {
+          "name": "VAULT_DATABASE_URL",
+          "description": "MySQL connection URL, e.g. mysql://user:password@host:3306/claw_vault",
+          "isRequired": true,
+          "format": "string",
+          "isSecret": true
+        },
+        {
           "name": "VAULT_MCP_API_KEY",
           "description": "API key required for HTTP MCP calls",
           "isRequired": true,
@@ -43,13 +50,6 @@
         {
           "name": "VAULT_ALLOWED_CAIP2",
           "description": "Comma-separated CAIP-2 chain allowlist for transaction submission",
-          "isRequired": false,
-          "format": "string",
-          "isSecret": false
-        },
-        {
-          "name": "VAULT_WALLET_STORE",
-          "description": "Path to the local agent wallet mapping JSON store",
           "isRequired": false,
           "format": "string",
           "isSecret": false
