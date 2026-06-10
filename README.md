@@ -6,6 +6,8 @@ It exposes constrained agent-facing wallet tools instead of the full Privy admin
 
 ## Tools
 
+Wallet tools:
+
 - `create_agent_wallet`
 - `list_agent_wallets`
 - `get_agent_wallet`
@@ -13,6 +15,22 @@ It exposes constrained agent-facing wallet tools instead of the full Privy admin
 - `send_agent_transaction`
 - `sign_agent_message`
 - `get_agent_transaction`
+
+Policy tools:
+
+- `create_wallet_policy`
+- `list_wallet_policies`
+- `get_wallet_policy`
+- `update_wallet_policy`
+- `delete_wallet_policy`
+- `create_wallet_policy_rule`
+- `list_wallet_policy_rules`
+- `get_wallet_policy_rule`
+- `update_wallet_policy_rule`
+- `delete_wallet_policy_rule`
+- `attach_policy_to_wallet`
+- `detach_policy_from_wallet`
+- `list_wallet_policies_for_wallet`
 
 ## Configuration
 
@@ -45,8 +63,6 @@ Optional:
 ```sh
 export PRIVY_API_BASE_URL=https://api.privy.io/v1
 export VAULT_ALLOWED_CAIP2=eip155:2345,eip155:48816
-export VAULT_DEFAULT_CAIP2=eip155:2345
-export VAULT_DEFAULT_MAX_NATIVE_UNITS=10000000000000 # 0.00001 BTC or 0.00001 ETH
 export VAULT_TRANSPORT=stdio
 export VAULT_HTTP_BIND=0.0.0.0:8080
 export VAULT_DB_MAX_CONNECTIONS=5
@@ -63,7 +79,7 @@ GRANT ALL PRIVILEGES ON claw_vault.* TO 'vault_user'@'%';
 FLUSH PRIVILEGES;
 ```
 
-The server automatically creates the `wallets` and `wallet_audit_logs` tables on startup.
+The server automatically creates the `wallets`, `wallet_audit_logs`, `wallet_policies`, `wallet_policy_rules`, `wallet_policy_links`, and `policy_audit_logs` tables on startup.
 
 Core ownership model:
 
@@ -74,7 +90,9 @@ provider            -> privy
 provider_wallet_id  -> Privy wallet id
 ```
 
-Sensitive tool calls are recorded in `wallet_audit_logs` with `user_id`, `agent_id`, internal `wallet_id`, provider ids, action, status, and request id when available.
+Sensitive wallet calls are recorded in `wallet_audit_logs`. Policy, rule, attach, and detach calls are recorded in `policy_audit_logs`.
+
+Users may freely manage the raw Privy policy JSON and raw Privy rule JSON for policies owned by their authenticated `user_id + agent_id`. Claw Vault validates ownership, scopes, and minimal JSON shape; it does not apply risk restrictions to user-owned policy/rule content. Deleting a policy or rule requires an explicit `confirm_delete` value (`delete policy` or `delete policy rule`) to prevent accidental guardrail removal.
 
 ## JWT Claims and Scopes
 
@@ -111,11 +129,20 @@ A space-delimited `scope` claim is also accepted:
 Scope requirements:
 
 ```text
-wallet:read     list_agent_wallets, get_agent_wallet, get_agent_wallet_balance
-wallet:create   create_agent_wallet
-wallet:send     send_agent_transaction
-wallet:sign     sign_agent_message
-wallet:tx:read  get_agent_transaction
+wallet:read          list_agent_wallets, get_agent_wallet, get_agent_wallet_balance
+wallet:create        create_agent_wallet
+wallet:send          send_agent_transaction
+wallet:sign          sign_agent_message
+wallet:tx:read       get_agent_transaction
+policy:read          list/get policy and rule tools, list_wallet_policies_for_wallet
+policy:create        create_wallet_policy
+policy:update        update_wallet_policy
+policy:delete        delete_wallet_policy
+policy:rule:create   create_wallet_policy_rule
+policy:rule:update   update_wallet_policy_rule
+policy:rule:delete   delete_wallet_policy_rule
+policy:attach        attach_policy_to_wallet
+policy:detach        detach_policy_from_wallet
 ```
 
 Tools do not accept `user_id` or `agent_id` as trusted inputs. Ownership comes from the authenticated request context.
@@ -160,7 +187,7 @@ curl \
   http://127.0.0.1:8080/mcp
 ```
 
-Create a wallet for the authenticated `user_id + agent_id` context:
+Create a policy for the authenticated `user_id + agent_id` context:
 
 ```sh
 curl \
@@ -171,10 +198,49 @@ curl \
     "id": 1,
     "method": "tools/call",
     "params": {
+      "name": "create_wallet_policy",
+      "arguments": {
+        "policy": {
+          "version": "1.0",
+          "name": "GOAT small spend",
+          "chain_type": "ethereum",
+          "rules": [
+            {
+              "name": "max native units per transaction",
+              "method": "eth_sendTransaction",
+              "conditions": [{
+                "field_source": "ethereum_transaction",
+                "field": "value",
+                "operator": "lte",
+                "value": "10000000000000"
+              }],
+              "action": "ALLOW"
+            }
+          ]
+        }
+      }
+    }
+  }' \
+  http://127.0.0.1:8080/mcp
+```
+
+The response includes an internal `policy.id`. Use that value to create a wallet.
+
+Create a wallet with the internal `policy_id`:
+
+```sh
+curl \
+  -H 'x-api-key: dev-secret' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/call",
+    "params": {
       "name": "create_agent_wallet",
       "arguments": {
-        "policy_template": "base-small-spend",
-        "label": "primary-base-wallet"
+        "policy_id": 1,
+        "label": "primary-goat-wallet"
       }
     }
   }' \
@@ -192,6 +258,37 @@ AND agent_id = ?
 ```
 
 and only then calls Privy with `provider_wallet_id`.
+
+Create a raw policy rule under an owned policy:
+
+```sh
+curl \
+  -H 'x-api-key: dev-secret' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "tools/call",
+    "params": {
+      "name": "create_wallet_policy_rule",
+      "arguments": {
+        "policy_id": 1,
+        "rule": {
+          "name": "allowed chain",
+          "method": "eth_sendTransaction",
+          "conditions": [{
+            "field_source": "ethereum_transaction",
+            "field": "chain_id",
+            "operator": "eq",
+            "value": "2345"
+          }],
+          "action": "ALLOW"
+        }
+      }
+    }
+  }' \
+  http://127.0.0.1:8080/mcp
+```
 
 Fetch a wallet binding:
 

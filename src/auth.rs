@@ -101,6 +101,15 @@ impl Authenticator {
                 "wallet:sign",
                 "wallet:send",
                 "wallet:tx:read",
+                "policy:read",
+                "policy:create",
+                "policy:update",
+                "policy:delete",
+                "policy:rule:create",
+                "policy:rule:update",
+                "policy:rule:delete",
+                "policy:attach",
+                "policy:detach",
             ]
             .into_iter()
             .map(ToOwned::to_owned)
@@ -192,6 +201,15 @@ impl Authenticator {
                 "wallet:sign",
                 "wallet:send",
                 "wallet:tx:read",
+                "policy:read",
+                "policy:create",
+                "policy:update",
+                "policy:delete",
+                "policy:rule:create",
+                "policy:rule:update",
+                "policy:rule:delete",
+                "policy:attach",
+                "policy:detach",
             ]
             .into_iter()
             .map(ToOwned::to_owned)

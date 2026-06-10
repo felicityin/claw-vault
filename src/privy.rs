@@ -34,6 +34,74 @@ impl PrivyClient {
             .await
     }
 
+    pub async fn get_policy(&self, policy_id: &str) -> Result<Value> {
+        self.request(
+            reqwest::Method::GET,
+            &format!("/policies/{policy_id}"),
+            None,
+        )
+        .await
+    }
+
+    pub async fn update_policy(&self, policy_id: &str, body: Value) -> Result<Value> {
+        self.request(
+            reqwest::Method::PATCH,
+            &format!("/policies/{policy_id}"),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn delete_policy(&self, policy_id: &str) -> Result<Value> {
+        self.request(
+            reqwest::Method::DELETE,
+            &format!("/policies/{policy_id}"),
+            None,
+        )
+        .await
+    }
+
+    pub async fn add_rule_to_policy(&self, policy_id: &str, rule: Value) -> Result<Value> {
+        self.request(
+            reqwest::Method::POST,
+            &format!("/policies/{policy_id}/rules"),
+            Some(rule),
+        )
+        .await
+    }
+
+    pub async fn get_policy_rule(&self, policy_id: &str, rule_id: &str) -> Result<Value> {
+        self.request(
+            reqwest::Method::GET,
+            &format!("/policies/{policy_id}/rules/{rule_id}"),
+            None,
+        )
+        .await
+    }
+
+    pub async fn update_policy_rule(
+        &self,
+        policy_id: &str,
+        rule_id: &str,
+        rule: Value,
+    ) -> Result<Value> {
+        self.request(
+            reqwest::Method::PATCH,
+            &format!("/policies/{policy_id}/rules/{rule_id}"),
+            Some(rule),
+        )
+        .await
+    }
+
+    pub async fn delete_policy_rule(&self, policy_id: &str, rule_id: &str) -> Result<Value> {
+        self.request(
+            reqwest::Method::DELETE,
+            &format!("/policies/{policy_id}/rules/{rule_id}"),
+            None,
+        )
+        .await
+    }
+
     pub async fn create_wallet(&self, chain_type: &str, policy_ids: &[String]) -> Result<Value> {
         self.request(
             reqwest::Method::POST,
@@ -42,6 +110,15 @@ impl PrivyClient {
                 "chain_type": chain_type,
                 "policy_ids": policy_ids
             })),
+        )
+        .await
+    }
+
+    pub async fn update_wallet(&self, wallet_id: &str, policy_ids: &[String]) -> Result<Value> {
+        self.request(
+            reqwest::Method::PATCH,
+            &format!("/wallets/{wallet_id}"),
+            Some(serde_json::json!({ "policy_ids": policy_ids })),
         )
         .await
     }
