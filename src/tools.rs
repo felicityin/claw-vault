@@ -8,8 +8,8 @@ use crate::auth::RequestContext;
 use crate::privy::PrivyClient;
 use crate::store::{NewWallet, Wallet, WalletStore};
 use crate::validation::{
-    chain_id_from_caip2, validate_allowed_caip2, validate_evm_address, validate_hex_data,
-    validate_wei_decimal, wei_decimal_to_hex,
+    chain_id_from_caip2, native_units_decimal_to_hex, validate_allowed_caip2, validate_evm_address,
+    validate_hex_data, validate_native_units_decimal,
 };
 
 const PRIVY_PROVIDER: &str = "privy";
@@ -85,7 +85,7 @@ impl ToolService {
                         "wallet_id": {"type": "integer"},
                         "caip2": {"type": "string"},
                         "to": {"type": "string"},
-                        "value_wei": {"type": "string", "default": "0"},
+                        "value_native_units": {"type": "string", "default": "0"},
                         "data": {"type": "string", "default": "0x"},
                         "sponsor": {"type": "boolean", "default": false}
                     },
@@ -158,14 +158,14 @@ impl ToolService {
         let template = PolicyTemplate::resolve(args.policy_template.as_deref())?;
         validate_allowed_caip2(&template.caip2)?;
         let chain_id = chain_id_from_caip2(&template.caip2)?;
-        validate_wei_decimal(&template.max_wei_per_transaction)?;
+        validate_native_units_decimal(&template.max_native_units_per_tx)?;
 
         let policy = self
             .privy
             .create_policy(default_policy(
                 &context.agent_id,
                 &chain_id,
-                &template.max_wei_per_transaction,
+                &template.max_native_units_per_tx,
             ))
             .await?;
         let policy_ids = vec![extract_string(&policy, &["id", "policy_id"])?];
@@ -252,8 +252,8 @@ impl ToolService {
         validate_allowed_caip2(&args.caip2)?;
         let chain_id = chain_id_from_caip2(&args.caip2)?;
         validate_evm_address(&args.to)?;
-        let value_wei = args.value_wei.unwrap_or_else(|| "0".to_string());
-        validate_wei_decimal(&value_wei)?;
+        let value_native_units = args.value_native_units.unwrap_or_else(|| "0".to_string());
+        validate_native_units_decimal(&value_native_units)?;
         let data = args.data.unwrap_or_else(|| "0x".to_string());
         validate_hex_data(&data)?;
 
@@ -270,7 +270,7 @@ impl ToolService {
             "params": {
                 "transaction": {
                     "to": args.to,
-                    "value": wei_decimal_to_hex(&value_wei)?,
+                    "value": native_units_decimal_to_hex(&value_native_units)?,
                     "data": data,
                     "chain_id": chain_id
                 }
@@ -405,7 +405,7 @@ struct SendTransactionArgs {
     wallet_id: i64,
     caip2: String,
     to: String,
-    value_wei: Option<String>,
+    value_native_units: Option<String>,
     data: Option<String>,
     sponsor: Option<bool>,
 }
@@ -425,7 +425,7 @@ struct TransactionArgs {
 struct PolicyTemplate {
     name: &'static str,
     caip2: String,
-    max_wei_per_transaction: String,
+    max_native_units_per_tx: String,
 }
 
 impl PolicyTemplate {
@@ -434,9 +434,9 @@ impl PolicyTemplate {
             "base-small-spend" => Ok(Self {
                 name: "base-small-spend",
                 caip2: env::var("VAULT_DEFAULT_CAIP2")
-                    .unwrap_or_else(|_| "eip155:8453".to_string()),
-                max_wei_per_transaction: env::var("VAULT_DEFAULT_MAX_WEI")
-                    .unwrap_or_else(|_| "5000000000000000".to_string()),
+                    .unwrap_or_else(|_| "eip155:2345".to_string()),
+                max_native_units_per_tx: env::var("VAULT_DEFAULT_MAX_NATIVE_UNITS")
+                    .unwrap_or_else(|_| "10000000000000".to_string()), // 0.00001 BTC or 0.00001 ETH
             }),
             other => Err(anyhow!("unknown policy_template '{other}'")),
         }
@@ -454,20 +454,20 @@ fn ensure_privy_wallet(wallet: &Wallet) -> Result<()> {
     }
 }
 
-fn default_policy(agent_id: &str, chain_id: &str, max_wei: &str) -> Value {
+fn default_policy(agent_id: &str, chain_id: &str, max_native_units: &str) -> Value {
     json!({
         "version": "1.0",
         "name": format!("clawup-{agent_id}"),
         "chain_type": "ethereum",
         "rules": [
             {
-                "name": "max wei per transaction",
+                "name": "max native units per transaction",
                 "method": "eth_sendTransaction",
                 "conditions": [{
                     "field_source": "ethereum_transaction",
                     "field": "value",
                     "operator": "lte",
-                    "value": max_wei
+                    "value": max_native_units,
                 }],
                 "action": "ALLOW"
             },

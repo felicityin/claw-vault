@@ -40,22 +40,24 @@ pub fn validate_hex_data(data: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn validate_wei_decimal(value: &str) -> Result<()> {
+pub fn validate_native_units_decimal(value: &str) -> Result<()> {
     if value.is_empty() || !value.chars().all(|c| c.is_ascii_digit()) {
-        return Err(anyhow!("wei value must be a decimal integer string"));
+        return Err(anyhow!(
+            "native units value must be a decimal integer string"
+        ));
     }
     Ok(())
 }
 
-pub fn wei_decimal_to_hex(value: &str) -> Result<String> {
-    validate_wei_decimal(value)?;
+pub fn native_units_decimal_to_hex(value: &str) -> Result<String> {
+    validate_native_units_decimal(value)?;
     let parsed = value.parse::<u128>()?;
     Ok(format!("0x{parsed:x}"))
 }
 
 pub fn allowed_caip2() -> BTreeSet<String> {
     env::var("VAULT_ALLOWED_CAIP2")
-        .unwrap_or_else(|_| "eip155:8453,eip155:11155111".to_string())
+        .unwrap_or_else(|_| "eip155:2345,eip155:48816".to_string())
         .split(',')
         .map(str::trim)
         .filter(|v| !v.is_empty())
