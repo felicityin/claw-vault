@@ -1,3 +1,4 @@
+mod auth;
 mod http;
 mod mcp;
 mod privy;
@@ -5,11 +6,12 @@ mod store;
 mod tools;
 mod validation;
 
+use std::env;
+
 use anyhow::Result;
 use http::serve_http;
 use mcp::McpServer;
 use privy::PrivyClient;
-use std::env;
 use store::WalletStore;
 use tools::ToolService;
 

@@ -1,14 +1,18 @@
-use crate::privy::PrivyClient;
-use crate::store::{AgentWallet, WalletStore};
-use crate::validation::{
-    chain_id_from_caip2, validate_agent_id, validate_allowed_caip2, validate_evm_address,
-    validate_hex_data, validate_wei_decimal, wei_decimal_to_hex,
-};
+use std::env;
+
 use anyhow::{Result, anyhow};
-use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::env;
+
+use crate::auth::RequestContext;
+use crate::privy::PrivyClient;
+use crate::store::{NewWallet, Wallet, WalletStore};
+use crate::validation::{
+    chain_id_from_caip2, validate_allowed_caip2, validate_evm_address, validate_hex_data,
+    validate_wei_decimal, wei_decimal_to_hex,
+};
+
+const PRIVY_PROVIDER: &str = "privy";
 
 pub struct ToolService {
     privy: PrivyClient,
@@ -24,77 +28,81 @@ impl ToolService {
         vec![
             json!({
                 "name": "create_agent_wallet",
-                "description": "Create a policy-bound Privy wallet for a Clawup agent. A wallet is never created without an attached policy.",
+                "description": "Create a policy-bound Privy wallet for the authenticated Clawup agent. User and agent identity come from the request JWT/context.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "agent_id": {"type": "string"},
-                        "chain_type": {"type": "string", "enum": ["ethereum"], "default": "ethereum"},
-                        "policy_id": {"type": "string", "description": "Existing Privy policy ID. If omitted, a default policy is created."},
-                        "max_wei_per_transaction": {"type": "string", "description": "Decimal wei limit for the default policy."},
-                        "caip2": {"type": "string", "description": "Allowed EVM CAIP-2 chain for the default policy, e.g. eip155:8453."}
+                        "policy_template": {
+                            "type": "string",
+                            "enum": ["base-small-spend"],
+                            "default": "base-small-spend"
+                        },
+                        "label": {"type": "string"}
                     },
-                    "required": ["agent_id"]
-                }
-            }),
-            json!({
-                "name": "get_agent_wallet",
-                "description": "Return the wallet binding for a Clawup agent and fetch current wallet details from Privy.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {"agent_id": {"type": "string"}},
-                    "required": ["agent_id"]
-                }
-            }),
-            json!({
-                "name": "list_agent_wallets",
-                "description": "List locally registered Clawup agent wallet bindings.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {"chain_type": {"type": "string", "enum": ["ethereum"]}},
                     "required": []
                 }
             }),
             json!({
-                "name": "get_agent_wallet_balance",
-                "description": "Get a wallet balance through Privy for a bound Clawup agent.",
+                "name": "list_agent_wallets",
+                "description": "List wallets owned by the authenticated user and agent.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "agent_id": {"type": "string"},
+                        "provider": {"type": "string", "enum": ["privy"]},
+                        "chain_type": {"type": "string", "enum": ["ethereum"]}
+                    },
+                    "required": []
+                }
+            }),
+            json!({
+                "name": "get_agent_wallet",
+                "description": "Return a wallet owned by the authenticated user and agent.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"wallet_id": {"type": "integer"}},
+                    "required": ["wallet_id"]
+                }
+            }),
+            json!({
+                "name": "get_agent_wallet_balance",
+                "description": "Get balance for a wallet owned by the authenticated user and agent.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "wallet_id": {"type": "integer"},
                         "asset": {"type": "string", "enum": ["eth", "usdc"]},
                         "chain": {"type": "string", "enum": ["ethereum", "arbitrum", "base", "linea", "optimism", "zksync_era"]}
                     },
-                    "required": ["agent_id", "asset", "chain"]
+                    "required": ["wallet_id", "asset", "chain"]
                 }
             }),
             json!({
                 "name": "send_agent_transaction",
-                "description": "Send an EVM transaction from a bound Clawup agent wallet. The CAIP-2 chain must be allowlisted and the wallet must have an attached Privy policy.",
+                "description": "Send an EVM transaction from a wallet owned by the authenticated user and agent.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "agent_id": {"type": "string"},
+                        "wallet_id": {"type": "integer"},
                         "caip2": {"type": "string"},
                         "to": {"type": "string"},
                         "value_wei": {"type": "string", "default": "0"},
                         "data": {"type": "string", "default": "0x"},
                         "sponsor": {"type": "boolean", "default": false}
                     },
-                    "required": ["agent_id", "caip2", "to"]
+                    "required": ["wallet_id", "caip2", "to"]
                 }
             }),
             json!({
                 "name": "sign_agent_message",
-                "description": "Sign a message with a bound Clawup agent EVM wallet using personal_sign.",
+                "description": "Sign a message with a wallet owned by the authenticated user and agent.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "agent_id": {"type": "string"},
+                        "wallet_id": {"type": "integer"},
                         "message": {"type": "string"},
                         "encoding": {"type": "string", "enum": ["utf-8", "hex"], "default": "utf-8"}
                     },
-                    "required": ["agent_id", "message"]
+                    "required": ["wallet_id", "message"]
                 }
             }),
             json!({
@@ -109,107 +117,137 @@ impl ToolService {
         ]
     }
 
-    pub async fn call_tool(&self, params: Value) -> Result<Value> {
+    pub async fn call_tool(&self, params: Value, context: &RequestContext) -> Result<Value> {
         let call: ToolCall = serde_json::from_value(params)?;
-        match call.name.as_str() {
-            "create_agent_wallet" => self.create_agent_wallet(call.arguments).await,
-            "get_agent_wallet" => self.get_agent_wallet(call.arguments).await,
-            "list_agent_wallets" => self.list_agent_wallets(call.arguments).await,
-            "get_agent_wallet_balance" => self.get_agent_wallet_balance(call.arguments).await,
-            "send_agent_transaction" => self.send_agent_transaction(call.arguments).await,
-            "sign_agent_message" => self.sign_agent_message(call.arguments).await,
-            "get_agent_transaction" => self.get_agent_transaction(call.arguments).await,
+        let name = call.name.clone();
+        let result = match call.name.as_str() {
+            "create_agent_wallet" => self.create_agent_wallet(call.arguments, context).await,
+            "list_agent_wallets" => self.list_agent_wallets(call.arguments, context).await,
+            "get_agent_wallet" => self.get_agent_wallet(call.arguments, context).await,
+            "get_agent_wallet_balance" => {
+                self.get_agent_wallet_balance(call.arguments, context).await
+            }
+            "send_agent_transaction" => self.send_agent_transaction(call.arguments, context).await,
+            "sign_agent_message" => self.sign_agent_message(call.arguments, context).await,
+            "get_agent_transaction" => self.get_agent_transaction(call.arguments, context).await,
             other => Err(anyhow!("unknown tool: {other}")),
+        };
+
+        if let Err(error) = &result {
+            let _ = self
+                .store
+                .record_audit(
+                    &context.user_id,
+                    &context.agent_id,
+                    None,
+                    &name,
+                    context.request_id.as_deref(),
+                    "failed",
+                    Some(&error.to_string()),
+                    None,
+                )
+                .await;
         }
+
+        result
     }
 
-    async fn create_agent_wallet(&self, args: Value) -> Result<Value> {
+    async fn create_agent_wallet(&self, args: Value, context: &RequestContext) -> Result<Value> {
+        context.require_scope("wallet:create")?;
         let args: CreateAgentWalletArgs = serde_json::from_value(args)?;
-        validate_agent_id(&args.agent_id)?;
-        if self.store.get(&args.agent_id).await?.is_some() {
-            return Err(anyhow!("agent_id already has a wallet binding"));
-        }
+        let template = PolicyTemplate::resolve(args.policy_template.as_deref())?;
+        validate_allowed_caip2(&template.caip2)?;
+        let chain_id = chain_id_from_caip2(&template.caip2)?;
+        validate_wei_decimal(&template.max_wei_per_transaction)?;
 
-        let chain_type = args.chain_type.unwrap_or_else(|| "ethereum".to_string());
-        if chain_type != "ethereum" {
-            return Err(anyhow!("only ethereum chain_type is supported in this MVP"));
-        }
+        let policy = self
+            .privy
+            .create_policy(default_policy(
+                &context.agent_id,
+                &chain_id,
+                &template.max_wei_per_transaction,
+            ))
+            .await?;
+        let policy_ids = vec![extract_string(&policy, &["id", "policy_id"])?];
+        let privy_wallet = self.privy.create_wallet("ethereum", &policy_ids).await?;
+        let provider_wallet_id = extract_string(&privy_wallet, &["id", "wallet_id"])?;
+        let address = extract_string(&privy_wallet, &["address"])?;
 
-        let policy_ids = if let Some(policy_id) = args.policy_id {
-            vec![policy_id]
-        } else {
-            let caip2 = args.caip2.unwrap_or_else(|| "eip155:8453".to_string());
-            validate_allowed_caip2(&caip2)?;
-            let chain_id = chain_id_from_caip2(&caip2)?;
-            let max_wei = args
-                .max_wei_per_transaction
-                .or_else(|| env::var("VAULT_DEFAULT_MAX_WEI").ok())
-                .unwrap_or_else(|| "50000000000000000".to_string());
-            validate_wei_decimal(&max_wei)?;
-            let policy = self
-                .privy
-                .create_policy(default_policy(&args.agent_id, &chain_id, &max_wei))
-                .await?;
-            vec![extract_string(&policy, &["id", "policy_id"])?]
-        };
+        let wallet = self
+            .store
+            .insert(NewWallet {
+                user_id: context.user_id.clone(),
+                agent_id: context.agent_id.clone(),
+                provider: PRIVY_PROVIDER.to_string(),
+                provider_wallet_id,
+                address,
+                chain_type: "ethereum".to_string(),
+                policy_ids,
+                metadata: json!({
+                    "policy_template": template.name,
+                    "label": args.label,
+                    "request_id": context.request_id,
+                }),
+            })
+            .await?;
 
-        if policy_ids.is_empty() {
-            return Err(anyhow!("policy_ids must not be empty"));
-        }
-
-        let wallet = self.privy.create_wallet(&chain_type, &policy_ids).await?;
-        let wallet_id = extract_string(&wallet, &["id", "wallet_id"])?;
-        let address = extract_string(&wallet, &["address"])?;
-        let binding = AgentWallet {
-            agent_id: args.agent_id,
-            wallet_id,
-            address,
-            chain_type,
-            policy_ids,
-            created_at: Utc::now(),
-            metadata: json!({}),
-        };
-        self.store.insert(binding.clone()).await?;
-
+        self.audit_success(context, Some(&wallet), "create_agent_wallet", None)
+            .await;
         tool_result(json!({
-            "agent_wallet": binding,
-            "privy_wallet": wallet
+            "wallet": wallet,
+            "provider_wallet": privy_wallet
         }))
     }
 
-    async fn get_agent_wallet(&self, args: Value) -> Result<Value> {
-        let args: AgentIdArgs = serde_json::from_value(args)?;
-        let binding = self.require_wallet(&args.agent_id).await?;
-        let privy_wallet = self.privy.get_wallet(&binding.wallet_id).await?;
-        tool_result(json!({
-            "agent_wallet": binding,
-            "privy_wallet": privy_wallet
-        }))
-    }
-
-    async fn list_agent_wallets(&self, args: Value) -> Result<Value> {
+    async fn list_agent_wallets(&self, args: Value, context: &RequestContext) -> Result<Value> {
+        context.require_scope("wallet:read")?;
         let args: ListAgentWalletsArgs = serde_json::from_value(args)?;
-        let mut wallets = self.store.list().await?;
+        let mut wallets = self
+            .store
+            .list_for_agent(&context.user_id, &context.agent_id)
+            .await?;
+        if let Some(provider) = args.provider {
+            wallets.retain(|wallet| wallet.provider == provider);
+        }
         if let Some(chain_type) = args.chain_type {
             wallets.retain(|wallet| wallet.chain_type == chain_type);
         }
         tool_result(json!({ "wallets": wallets }))
     }
 
-    async fn get_agent_wallet_balance(&self, args: Value) -> Result<Value> {
+    async fn get_agent_wallet(&self, args: Value, context: &RequestContext) -> Result<Value> {
+        context.require_scope("wallet:read")?;
+        let args: WalletIdArgs = serde_json::from_value(args)?;
+        let wallet = self.require_wallet(args.wallet_id, context).await?;
+        ensure_privy_wallet(&wallet)?;
+        let provider_wallet = self.privy.get_wallet(&wallet.provider_wallet_id).await?;
+        tool_result(json!({
+            "wallet": wallet,
+            "provider_wallet": provider_wallet
+        }))
+    }
+
+    async fn get_agent_wallet_balance(
+        &self,
+        args: Value,
+        context: &RequestContext,
+    ) -> Result<Value> {
+        context.require_scope("wallet:read")?;
         let args: BalanceArgs = serde_json::from_value(args)?;
-        let binding = self.require_wallet(&args.agent_id).await?;
+        let wallet = self.require_wallet(args.wallet_id, context).await?;
+        ensure_privy_wallet(&wallet)?;
         let balance = self
             .privy
-            .get_balance(&binding.wallet_id, &args.asset, &args.chain)
+            .get_balance(&wallet.provider_wallet_id, &args.asset, &args.chain)
             .await?;
         tool_result(json!({
-            "agent_wallet": binding,
+            "wallet": wallet,
             "balance": balance
         }))
     }
 
-    async fn send_agent_transaction(&self, args: Value) -> Result<Value> {
+    async fn send_agent_transaction(&self, args: Value, context: &RequestContext) -> Result<Value> {
+        context.require_scope("wallet:send")?;
         let args: SendTransactionArgs = serde_json::from_value(args)?;
         validate_allowed_caip2(&args.caip2)?;
         let chain_id = chain_id_from_caip2(&args.caip2)?;
@@ -219,11 +257,10 @@ impl ToolService {
         let data = args.data.unwrap_or_else(|| "0x".to_string());
         validate_hex_data(&data)?;
 
-        let binding = self.require_wallet(&args.agent_id).await?;
-        if binding.policy_ids.is_empty() {
-            return Err(anyhow!(
-                "wallet binding has no policy_ids; refusing transaction"
-            ));
+        let wallet = self.require_wallet(args.wallet_id, context).await?;
+        ensure_privy_wallet(&wallet)?;
+        if wallet.policy_ids.is_empty() {
+            return Err(anyhow!("wallet has no policy_ids; refusing transaction"));
         }
 
         let tx = json!({
@@ -241,16 +278,29 @@ impl ToolService {
             "sponsor": args.sponsor.unwrap_or(false)
         });
 
-        let response = self.privy.wallet_rpc(&binding.wallet_id, tx).await?;
+        let response = self
+            .privy
+            .wallet_rpc(&wallet.provider_wallet_id, tx)
+            .await?;
+        let transaction_id = extract_optional_string(&response, &["id", "transaction_id", "hash"]);
+        self.audit_success(
+            context,
+            Some(&wallet),
+            "send_agent_transaction",
+            transaction_id.as_deref(),
+        )
+        .await;
         tool_result(json!({
-            "agent_wallet": binding,
+            "wallet": wallet,
             "transaction": response
         }))
     }
 
-    async fn sign_agent_message(&self, args: Value) -> Result<Value> {
+    async fn sign_agent_message(&self, args: Value, context: &RequestContext) -> Result<Value> {
+        context.require_scope("wallet:sign")?;
         let args: SignMessageArgs = serde_json::from_value(args)?;
-        let binding = self.require_wallet(&args.agent_id).await?;
+        let wallet = self.require_wallet(args.wallet_id, context).await?;
+        ensure_privy_wallet(&wallet)?;
         let encoding = args.encoding.unwrap_or_else(|| "utf-8".to_string());
         if encoding == "hex" {
             validate_hex_data(&args.message)?;
@@ -261,7 +311,7 @@ impl ToolService {
         let response = self
             .privy
             .wallet_rpc(
-                &binding.wallet_id,
+                &wallet.provider_wallet_id,
                 json!({
                     "method": "personal_sign",
                     "params": {
@@ -271,13 +321,16 @@ impl ToolService {
                 }),
             )
             .await?;
+        self.audit_success(context, Some(&wallet), "sign_agent_message", None)
+            .await;
         tool_result(json!({
-            "agent_wallet": binding,
+            "wallet": wallet,
             "signature": response
         }))
     }
 
-    async fn get_agent_transaction(&self, args: Value) -> Result<Value> {
+    async fn get_agent_transaction(&self, args: Value, context: &RequestContext) -> Result<Value> {
+        context.require_scope("wallet:tx:read")?;
         let args: TransactionArgs = serde_json::from_value(args)?;
         if args.transaction_id.trim().is_empty() {
             return Err(anyhow!("transaction_id is required"));
@@ -286,12 +339,33 @@ impl ToolService {
         tool_result(json!({ "transaction": transaction }))
     }
 
-    async fn require_wallet(&self, agent_id: &str) -> Result<AgentWallet> {
-        validate_agent_id(agent_id)?;
+    async fn require_wallet(&self, wallet_id: i64, context: &RequestContext) -> Result<Wallet> {
         self.store
-            .get(agent_id)
+            .get_by_id_for_agent(wallet_id, &context.user_id, &context.agent_id)
             .await?
-            .ok_or_else(|| anyhow!("no wallet binding found for agent_id"))
+            .ok_or_else(|| anyhow!("wallet not found for authenticated user and agent"))
+    }
+
+    async fn audit_success(
+        &self,
+        context: &RequestContext,
+        wallet: Option<&Wallet>,
+        action: &str,
+        transaction_id: Option<&str>,
+    ) {
+        let _ = self
+            .store
+            .record_audit(
+                &context.user_id,
+                &context.agent_id,
+                wallet,
+                action,
+                context.request_id.as_deref(),
+                "succeeded",
+                None,
+                transaction_id,
+            )
+            .await;
     }
 }
 
@@ -304,33 +378,31 @@ struct ToolCall {
 
 #[derive(Debug, Deserialize)]
 struct CreateAgentWalletArgs {
-    agent_id: String,
-    chain_type: Option<String>,
-    policy_id: Option<String>,
-    max_wei_per_transaction: Option<String>,
-    caip2: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AgentIdArgs {
-    agent_id: String,
+    policy_template: Option<String>,
+    label: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ListAgentWalletsArgs {
+    provider: Option<String>,
     chain_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
+struct WalletIdArgs {
+    wallet_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
 struct BalanceArgs {
-    agent_id: String,
+    wallet_id: i64,
     asset: String,
     chain: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct SendTransactionArgs {
-    agent_id: String,
+    wallet_id: i64,
     caip2: String,
     to: String,
     value_wei: Option<String>,
@@ -340,7 +412,7 @@ struct SendTransactionArgs {
 
 #[derive(Debug, Deserialize)]
 struct SignMessageArgs {
-    agent_id: String,
+    wallet_id: i64,
     message: String,
     encoding: Option<String>,
 }
@@ -348,6 +420,38 @@ struct SignMessageArgs {
 #[derive(Debug, Deserialize)]
 struct TransactionArgs {
     transaction_id: String,
+}
+
+struct PolicyTemplate {
+    name: &'static str,
+    caip2: String,
+    max_wei_per_transaction: String,
+}
+
+impl PolicyTemplate {
+    fn resolve(name: Option<&str>) -> Result<Self> {
+        match name.unwrap_or("base-small-spend") {
+            "base-small-spend" => Ok(Self {
+                name: "base-small-spend",
+                caip2: env::var("VAULT_DEFAULT_CAIP2")
+                    .unwrap_or_else(|_| "eip155:8453".to_string()),
+                max_wei_per_transaction: env::var("VAULT_DEFAULT_MAX_WEI")
+                    .unwrap_or_else(|_| "5000000000000000".to_string()),
+            }),
+            other => Err(anyhow!("unknown policy_template '{other}'")),
+        }
+    }
+}
+
+fn ensure_privy_wallet(wallet: &Wallet) -> Result<()> {
+    if wallet.provider == PRIVY_PROVIDER {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "unsupported wallet provider '{}'; expected privy",
+            wallet.provider
+        ))
+    }
 }
 
 fn default_policy(agent_id: &str, chain_id: &str, max_wei: &str) -> Value {
@@ -383,15 +487,17 @@ fn default_policy(agent_id: &str, chain_id: &str, max_wei: &str) -> Value {
 }
 
 fn extract_string(value: &Value, keys: &[&str]) -> Result<String> {
+    extract_optional_string(value, keys)
+        .ok_or_else(|| anyhow!("Privy response is missing one of: {}", keys.join(", ")))
+}
+
+fn extract_optional_string(value: &Value, keys: &[&str]) -> Option<String> {
     for key in keys {
         if let Some(found) = value.get(*key).and_then(Value::as_str) {
-            return Ok(found.to_string());
+            return Some(found.to_string());
         }
     }
-    Err(anyhow!(
-        "Privy response is missing one of: {}",
-        keys.join(", ")
-    ))
+    None
 }
 
 fn tool_result(value: Value) -> Result<Value> {

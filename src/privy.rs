@@ -1,8 +1,9 @@
+use std::env;
+
 use anyhow::{Result, anyhow};
 use base64::Engine;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde_json::Value;
-use std::env;
 
 #[derive(Clone)]
 pub struct PrivyClient {

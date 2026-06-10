@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "com.clawup/claw-vault",
-  "description": "Clawup agent wallet MCP server backed by Privy. Creates policy-bound agent wallets and exposes constrained wallet tools for hosted agents.",
+  "description": "Clawup multi-user agent wallet MCP server backed by Privy. Uses JWT context for user/agent ownership and stores provider-neutral wallets in MySQL.",
   "version": "0.1.0",
   "packages": [
     {
@@ -34,11 +34,53 @@
           "isSecret": true
         },
         {
-          "name": "VAULT_MCP_API_KEY",
-          "description": "API key required for HTTP MCP calls",
-          "isRequired": true,
+          "name": "VAULT_AUTH_MODE",
+          "description": "Authentication mode: jwt for production, api_key for local/dev",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "VAULT_JWT_SECRET",
+          "description": "HS256 JWT verification secret for production JWT mode",
+          "isRequired": false,
           "format": "string",
           "isSecret": true
+        },
+        {
+          "name": "VAULT_JWT_ISSUER",
+          "description": "Expected JWT issuer",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "VAULT_JWT_AUDIENCE",
+          "description": "Expected JWT audience, typically claw-vault",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "VAULT_MCP_API_KEY",
+          "description": "API key for local/dev api_key auth mode",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "VAULT_USER_ID",
+          "description": "User id used in api_key and stdio modes",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "VAULT_AGENT_ID",
+          "description": "Agent id used in api_key and stdio modes",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
         },
         {
           "name": "VAULT_TRANSPORT",
@@ -50,6 +92,13 @@
         {
           "name": "VAULT_ALLOWED_CAIP2",
           "description": "Comma-separated CAIP-2 chain allowlist for transaction submission",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "VAULT_DEFAULT_CAIP2",
+          "description": "Default CAIP-2 chain used by the base-small-spend policy template",
           "isRequired": false,
           "format": "string",
           "isSecret": false
