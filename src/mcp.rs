@@ -1,8 +1,10 @@
-use crate::tools::ToolService;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+use crate::auth::{Authenticator, RequestContext};
+use crate::tools::ToolService;
 
 #[derive(Debug, Deserialize)]
 struct JsonRpcRequest {
@@ -43,9 +45,9 @@ impl McpDispatcher {
         Self { service }
     }
 
-    pub async fn dispatch(&self, payload: Value) -> McpOutcome {
+    pub async fn dispatch(&self, payload: Value, context: RequestContext) -> McpOutcome {
         match serde_json::from_value::<JsonRpcRequest>(payload) {
-            Ok(request) => self.handle_request(request).await,
+            Ok(request) => self.handle_request(request, context).await,
             Err(error) => McpOutcome::Response(JsonRpcResponse {
                 jsonrpc: "2.0",
                 id: Value::Null,
@@ -58,7 +60,7 @@ impl McpDispatcher {
         }
     }
 
-    async fn handle_request(&self, request: JsonRpcRequest) -> McpOutcome {
+    async fn handle_request(&self, request: JsonRpcRequest, context: RequestContext) -> McpOutcome {
         let is_notification = request.id.is_none();
         let id = request.id.unwrap_or(Value::Null);
 
@@ -91,7 +93,7 @@ impl McpDispatcher {
                     "tools": self.service.tool_definitions()
                 }),
             ),
-            "tools/call" => match self.service.call_tool(request.params).await {
+            "tools/call" => match self.service.call_tool(request.params, &context).await {
                 Ok(result) => ok_response(id, result),
                 Err(error) => error_response(id, -32603, &error.to_string()),
             },
@@ -112,6 +114,7 @@ impl McpServer {
     }
 
     pub async fn serve_stdio(self) -> Result<()> {
+        let context = Authenticator::dev_context_from_env();
         let stdin = tokio::io::stdin();
         let stdout = tokio::io::stdout();
         let mut reader = BufReader::new(stdin).lines();
@@ -142,7 +145,9 @@ impl McpServer {
                 }
             };
 
-            if let McpOutcome::Response(response) = self.dispatcher.dispatch(payload).await {
+            if let McpOutcome::Response(response) =
+                self.dispatcher.dispatch(payload, context.clone()).await
+            {
                 let encoded = serde_json::to_vec(&response)?;
                 writer.write_all(&encoded).await?;
                 writer.write_all(b"\n").await?;

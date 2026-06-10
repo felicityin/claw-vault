@@ -1,6 +1,7 @@
-use anyhow::{Result, anyhow};
 use std::collections::BTreeSet;
 use std::env;
+
+use anyhow::{Result, anyhow};
 
 pub fn validate_agent_id(agent_id: &str) -> Result<()> {
     if agent_id.is_empty() || agent_id.len() > 128 {
