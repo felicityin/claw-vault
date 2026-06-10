@@ -95,13 +95,6 @@
           "isRequired": false,
           "format": "string",
           "isSecret": false
-        },
-        {
-          "name": "VAULT_DEFAULT_CAIP2",
-          "description": "Default CAIP-2 chain used by the base-small-spend policy template",
-          "isRequired": false,
-          "format": "string",
-          "isSecret": false
         }
       ]
     }

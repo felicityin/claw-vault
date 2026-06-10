@@ -1,12 +1,13 @@
-use std::env;
-
 use anyhow::{Result, anyhow};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::auth::RequestContext;
 use crate::privy::PrivyClient;
-use crate::store::{NewWallet, Wallet, WalletStore};
+use crate::store::{
+    NewWallet, NewWalletPolicy, NewWalletPolicyRule, Wallet, WalletPolicy, WalletPolicyRule,
+    WalletStore,
+};
 use crate::validation::{
     chain_id_from_caip2, native_units_decimal_to_hex, validate_allowed_caip2, validate_evm_address,
     validate_hex_data, validate_native_units_decimal,
@@ -28,18 +29,14 @@ impl ToolService {
         vec![
             json!({
                 "name": "create_agent_wallet",
-                "description": "Create a policy-bound Privy wallet for the authenticated Clawup agent. User and agent identity come from the request JWT/context.",
+                "description": "Create a Privy wallet for the authenticated user and agent using an owned active policy.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "policy_template": {
-                            "type": "string",
-                            "enum": ["base-small-spend"],
-                            "default": "base-small-spend"
-                        },
+                        "policy_id": {"type": "integer"},
                         "label": {"type": "string"}
                     },
-                    "required": []
+                    "required": ["policy_id"]
                 }
             }),
             json!({
@@ -114,6 +111,153 @@ impl ToolService {
                     "required": ["transaction_id"]
                 }
             }),
+            json!({
+                "name": "create_wallet_policy",
+                "description": "Create a Privy policy owned by the authenticated user and agent. The policy JSON is user-controlled.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "policy": {"type": "object"},
+                        "metadata": {"type": "object"},
+                        "status": {"type": "string", "default": "active"}
+                    },
+                    "required": ["policy"]
+                }
+            }),
+            json!({
+                "name": "list_wallet_policies",
+                "description": "List policies owned by the authenticated user and agent.",
+                "inputSchema": {"type": "object", "properties": {}, "required": []}
+            }),
+            json!({
+                "name": "get_wallet_policy",
+                "description": "Get an owned policy by internal policy_id.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"policy_id": {"type": "integer"}},
+                    "required": ["policy_id"]
+                }
+            }),
+            json!({
+                "name": "update_wallet_policy",
+                "description": "Update an owned Privy policy with user-controlled policy JSON.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "policy_id": {"type": "integer"},
+                        "policy": {"type": "object"},
+                        "status": {"type": "string"}
+                    },
+                    "required": ["policy_id", "policy"]
+                }
+            }),
+            json!({
+                "name": "delete_wallet_policy",
+                "description": "Delete an owned policy from Privy and local storage. Requires explicit user confirmation.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "policy_id": {"type": "integer"},
+                        "confirm_delete": {"type": "string", "description": "Must equal delete policy"}
+                    },
+                    "required": ["policy_id", "confirm_delete"]
+                }
+            }),
+            json!({
+                "name": "create_wallet_policy_rule",
+                "description": "Create a rule under an owned policy. The rule JSON is user-controlled.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "policy_id": {"type": "integer"},
+                        "rule": {"type": "object"},
+                        "metadata": {"type": "object"},
+                        "status": {"type": "string", "default": "active"}
+                    },
+                    "required": ["policy_id", "rule"]
+                }
+            }),
+            json!({
+                "name": "list_wallet_policy_rules",
+                "description": "List rules under an owned policy.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"policy_id": {"type": "integer"}},
+                    "required": ["policy_id"]
+                }
+            }),
+            json!({
+                "name": "get_wallet_policy_rule",
+                "description": "Get an owned policy rule by internal ids.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "policy_id": {"type": "integer"},
+                        "rule_id": {"type": "integer"}
+                    },
+                    "required": ["policy_id", "rule_id"]
+                }
+            }),
+            json!({
+                "name": "update_wallet_policy_rule",
+                "description": "Update an owned policy rule with user-controlled rule JSON.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "policy_id": {"type": "integer"},
+                        "rule_id": {"type": "integer"},
+                        "rule": {"type": "object"},
+                        "status": {"type": "string"}
+                    },
+                    "required": ["policy_id", "rule_id", "rule"]
+                }
+            }),
+            json!({
+                "name": "delete_wallet_policy_rule",
+                "description": "Delete an owned policy rule from Privy and local storage. Requires explicit user confirmation.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "policy_id": {"type": "integer"},
+                        "rule_id": {"type": "integer"},
+                        "confirm_delete": {"type": "string", "description": "Must equal delete policy rule"}
+                    },
+                    "required": ["policy_id", "rule_id", "confirm_delete"]
+                }
+            }),
+            json!({
+                "name": "attach_policy_to_wallet",
+                "description": "Attach an owned active policy to an owned wallet and update the Privy wallet policy list.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "wallet_id": {"type": "integer"},
+                        "policy_id": {"type": "integer"}
+                    },
+                    "required": ["wallet_id", "policy_id"]
+                }
+            }),
+            json!({
+                "name": "detach_policy_from_wallet",
+                "description": "Detach an owned policy from an owned wallet and update the Privy wallet policy list.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "wallet_id": {"type": "integer"},
+                        "policy_id": {"type": "integer"}
+                    },
+                    "required": ["wallet_id", "policy_id"]
+                }
+            }),
+            json!({
+                "name": "list_wallet_policies_for_wallet",
+                "description": "List internal policies linked to an owned wallet.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"wallet_id": {"type": "integer"}},
+                    "required": ["wallet_id"]
+                }
+            }),
         ]
     }
 
@@ -130,23 +274,71 @@ impl ToolService {
             "send_agent_transaction" => self.send_agent_transaction(call.arguments, context).await,
             "sign_agent_message" => self.sign_agent_message(call.arguments, context).await,
             "get_agent_transaction" => self.get_agent_transaction(call.arguments, context).await,
+            "create_wallet_policy" => self.create_wallet_policy(call.arguments, context).await,
+            "list_wallet_policies" => self.list_wallet_policies(context).await,
+            "get_wallet_policy" => self.get_wallet_policy(call.arguments, context).await,
+            "update_wallet_policy" => self.update_wallet_policy(call.arguments, context).await,
+            "delete_wallet_policy" => self.delete_wallet_policy(call.arguments, context).await,
+            "create_wallet_policy_rule" => {
+                self.create_wallet_policy_rule(call.arguments, context)
+                    .await
+            }
+            "list_wallet_policy_rules" => {
+                self.list_wallet_policy_rules(call.arguments, context).await
+            }
+            "get_wallet_policy_rule" => self.get_wallet_policy_rule(call.arguments, context).await,
+            "update_wallet_policy_rule" => {
+                self.update_wallet_policy_rule(call.arguments, context)
+                    .await
+            }
+            "delete_wallet_policy_rule" => {
+                self.delete_wallet_policy_rule(call.arguments, context)
+                    .await
+            }
+            "attach_policy_to_wallet" => {
+                self.attach_policy_to_wallet(call.arguments, context).await
+            }
+            "detach_policy_from_wallet" => {
+                self.detach_policy_from_wallet(call.arguments, context)
+                    .await
+            }
+            "list_wallet_policies_for_wallet" => {
+                self.list_wallet_policies_for_wallet(call.arguments, context)
+                    .await
+            }
             other => Err(anyhow!("unknown tool: {other}")),
         };
 
         if let Err(error) = &result {
-            let _ = self
-                .store
-                .record_audit(
-                    &context.user_id,
-                    &context.agent_id,
-                    None,
-                    &name,
-                    context.request_id.as_deref(),
-                    "failed",
-                    Some(&error.to_string()),
-                    None,
-                )
-                .await;
+            if is_policy_tool(&name) {
+                let _ = self
+                    .store
+                    .record_policy_audit(
+                        &context.user_id,
+                        &context.agent_id,
+                        None,
+                        None,
+                        &format!("{name}_failed"),
+                        context.request_id.as_deref(),
+                        "failed",
+                        Some(&error.to_string()),
+                    )
+                    .await;
+            } else {
+                let _ = self
+                    .store
+                    .record_audit(
+                        &context.user_id,
+                        &context.agent_id,
+                        None,
+                        &name,
+                        context.request_id.as_deref(),
+                        "failed",
+                        Some(&error.to_string()),
+                        None,
+                    )
+                    .await;
+            }
         }
 
         result
@@ -155,23 +347,16 @@ impl ToolService {
     async fn create_agent_wallet(&self, args: Value, context: &RequestContext) -> Result<Value> {
         context.require_scope("wallet:create")?;
         let args: CreateAgentWalletArgs = serde_json::from_value(args)?;
-        let template = PolicyTemplate::resolve(args.policy_template.as_deref())?;
-        validate_allowed_caip2(&template.caip2)?;
-        let chain_id = chain_id_from_caip2(&template.caip2)?;
-        validate_native_units_decimal(&template.max_native_units_per_tx)?;
+        let policy = self.require_policy(args.policy_id, context).await?;
+        ensure_privy_policy(&policy)?;
+        if policy.status != "active" {
+            return Err(anyhow!("policy is not active"));
+        }
 
-        let policy = self
-            .privy
-            .create_policy(default_policy(
-                &context.agent_id,
-                &chain_id,
-                &template.max_native_units_per_tx,
-            ))
-            .await?;
-        let policy_ids = vec![extract_string(&policy, &["id", "policy_id"])?];
-        let privy_wallet = self.privy.create_wallet("ethereum", &policy_ids).await?;
-        let provider_wallet_id = extract_string(&privy_wallet, &["id", "wallet_id"])?;
-        let address = extract_string(&privy_wallet, &["address"])?;
+        let policy_ids = vec![policy.provider_policy_id.clone()];
+        let provider_wallet = self.privy.create_wallet("ethereum", &policy_ids).await?;
+        let provider_wallet_id = extract_string(&provider_wallet, &["id", "wallet_id"])?;
+        let address = extract_string(&provider_wallet, &["address"])?;
 
         let wallet = self
             .store
@@ -184,18 +369,23 @@ impl ToolService {
                 chain_type: "ethereum".to_string(),
                 policy_ids,
                 metadata: json!({
-                    "policy_template": template.name,
                     "label": args.label,
                     "request_id": context.request_id,
                 }),
             })
             .await?;
+        self.store
+            .attach_policy_to_wallet(wallet.id, policy.id, &context.user_id, &context.agent_id)
+            .await?;
 
-        self.audit_success(context, Some(&wallet), "create_agent_wallet", None)
+        self.audit_wallet_success(context, Some(&wallet), "create_agent_wallet", None)
+            .await;
+        self.audit_policy_success(context, Some(&policy), None, "policy_attached")
             .await;
         tool_result(json!({
             "wallet": wallet,
-            "provider_wallet": privy_wallet
+            "policy": policy,
+            "provider_wallet": provider_wallet
         }))
     }
 
@@ -240,10 +430,7 @@ impl ToolService {
             .privy
             .get_balance(&wallet.provider_wallet_id, &args.asset, &args.chain)
             .await?;
-        tool_result(json!({
-            "wallet": wallet,
-            "balance": balance
-        }))
+        tool_result(json!({ "wallet": wallet, "balance": balance }))
     }
 
     async fn send_agent_transaction(&self, args: Value, context: &RequestContext) -> Result<Value> {
@@ -283,17 +470,14 @@ impl ToolService {
             .wallet_rpc(&wallet.provider_wallet_id, tx)
             .await?;
         let transaction_id = extract_optional_string(&response, &["id", "transaction_id", "hash"]);
-        self.audit_success(
+        self.audit_wallet_success(
             context,
             Some(&wallet),
             "send_agent_transaction",
             transaction_id.as_deref(),
         )
         .await;
-        tool_result(json!({
-            "wallet": wallet,
-            "transaction": response
-        }))
+        tool_result(json!({ "wallet": wallet, "transaction": response }))
     }
 
     async fn sign_agent_message(&self, args: Value, context: &RequestContext) -> Result<Value> {
@@ -314,19 +498,13 @@ impl ToolService {
                 &wallet.provider_wallet_id,
                 json!({
                     "method": "personal_sign",
-                    "params": {
-                        "message": args.message,
-                        "encoding": encoding
-                    }
+                    "params": { "message": args.message, "encoding": encoding }
                 }),
             )
             .await?;
-        self.audit_success(context, Some(&wallet), "sign_agent_message", None)
+        self.audit_wallet_success(context, Some(&wallet), "sign_agent_message", None)
             .await;
-        tool_result(json!({
-            "wallet": wallet,
-            "signature": response
-        }))
+        tool_result(json!({ "wallet": wallet, "signature": response }))
     }
 
     async fn get_agent_transaction(&self, args: Value, context: &RequestContext) -> Result<Value> {
@@ -339,6 +517,338 @@ impl ToolService {
         tool_result(json!({ "transaction": transaction }))
     }
 
+    async fn create_wallet_policy(&self, args: Value, context: &RequestContext) -> Result<Value> {
+        context.require_scope("policy:create")?;
+        let args: CreateWalletPolicyArgs = serde_json::from_value(args)?;
+        let (name, chain_type) = validate_policy_json(&args.policy)?;
+        let provider_policy = self.privy.create_policy(args.policy.clone()).await?;
+        let provider_policy_id = extract_string(&provider_policy, &["id", "policy_id"])?;
+        let policy = self
+            .store
+            .create_policy(NewWalletPolicy {
+                user_id: context.user_id.clone(),
+                agent_id: context.agent_id.clone(),
+                provider: PRIVY_PROVIDER.to_string(),
+                provider_policy_id,
+                name,
+                chain_type,
+                policy_json: args.policy,
+                status: args.status.unwrap_or_else(|| "active".to_string()),
+                metadata: args.metadata.unwrap_or_else(|| json!({})),
+            })
+            .await?;
+        self.audit_policy_success(context, Some(&policy), None, "policy_created")
+            .await;
+        tool_result(json!({ "policy": policy, "provider_policy": provider_policy }))
+    }
+
+    async fn list_wallet_policies(&self, context: &RequestContext) -> Result<Value> {
+        context.require_scope("policy:read")?;
+        let policies = self
+            .store
+            .list_policies_for_agent(&context.user_id, &context.agent_id)
+            .await?;
+        tool_result(json!({ "policies": policies }))
+    }
+
+    async fn get_wallet_policy(&self, args: Value, context: &RequestContext) -> Result<Value> {
+        context.require_scope("policy:read")?;
+        let args: PolicyIdArgs = serde_json::from_value(args)?;
+        let policy = self.require_policy(args.policy_id, context).await?;
+        ensure_privy_policy(&policy)?;
+        let provider_policy = self.privy.get_policy(&policy.provider_policy_id).await?;
+        tool_result(json!({ "policy": policy, "provider_policy": provider_policy }))
+    }
+
+    async fn update_wallet_policy(&self, args: Value, context: &RequestContext) -> Result<Value> {
+        context.require_scope("policy:update")?;
+        let args: UpdateWalletPolicyArgs = serde_json::from_value(args)?;
+        let policy = self.require_policy(args.policy_id, context).await?;
+        ensure_privy_policy(&policy)?;
+        let (name, chain_type) = validate_policy_json(&args.policy)?;
+        let provider_policy = self
+            .privy
+            .update_policy(&policy.provider_policy_id, args.policy.clone())
+            .await?;
+        let status = args.status.unwrap_or(policy.status);
+        self.store
+            .update_policy_for_agent(
+                args.policy_id,
+                &context.user_id,
+                &context.agent_id,
+                &name,
+                &chain_type,
+                &args.policy,
+                &status,
+            )
+            .await?;
+        let updated = self.require_policy(args.policy_id, context).await?;
+        self.audit_policy_success(context, Some(&updated), None, "policy_updated")
+            .await;
+        tool_result(json!({ "policy": updated, "provider_policy": provider_policy }))
+    }
+
+    async fn delete_wallet_policy(&self, args: Value, context: &RequestContext) -> Result<Value> {
+        context.require_scope("policy:delete")?;
+        let args: DeletePolicyArgs = serde_json::from_value(args)?;
+        require_delete_confirmation(&args.confirm_delete, "delete policy")?;
+        let policy = self.require_policy(args.policy_id, context).await?;
+        ensure_privy_policy(&policy)?;
+        let provider_response = self.privy.delete_policy(&policy.provider_policy_id).await?;
+        self.store
+            .delete_policy_for_agent(args.policy_id, &context.user_id, &context.agent_id)
+            .await?;
+        self.audit_policy_success(context, Some(&policy), None, "policy_deleted")
+            .await;
+        tool_result(json!({ "deleted": true, "provider_response": provider_response }))
+    }
+
+    async fn create_wallet_policy_rule(
+        &self,
+        args: Value,
+        context: &RequestContext,
+    ) -> Result<Value> {
+        context.require_scope("policy:rule:create")?;
+        let args: CreateWalletPolicyRuleArgs = serde_json::from_value(args)?;
+        let policy = self.require_policy(args.policy_id, context).await?;
+        ensure_privy_policy(&policy)?;
+        validate_rule_json(&args.rule)?;
+        let provider_rule = self
+            .privy
+            .add_rule_to_policy(&policy.provider_policy_id, args.rule.clone())
+            .await?;
+        let provider_rule_id = extract_optional_string(&provider_rule, &["id", "rule_id"]);
+        let rule = self
+            .store
+            .create_policy_rule(NewWalletPolicyRule {
+                policy_id: policy.id,
+                user_id: context.user_id.clone(),
+                agent_id: context.agent_id.clone(),
+                provider: policy.provider.clone(),
+                provider_policy_id: policy.provider_policy_id.clone(),
+                provider_rule_id,
+                rule_json: args.rule,
+                status: args.status.unwrap_or_else(|| "active".to_string()),
+                metadata: args.metadata.unwrap_or_else(|| json!({})),
+            })
+            .await?;
+        self.audit_policy_success(context, Some(&policy), Some(&rule), "policy_rule_created")
+            .await;
+        tool_result(json!({ "rule": rule, "provider_rule": provider_rule }))
+    }
+
+    async fn list_wallet_policy_rules(
+        &self,
+        args: Value,
+        context: &RequestContext,
+    ) -> Result<Value> {
+        context.require_scope("policy:read")?;
+        let args: PolicyIdArgs = serde_json::from_value(args)?;
+        let policy = self.require_policy(args.policy_id, context).await?;
+        let rules = self
+            .store
+            .list_policy_rules_for_agent(policy.id, &context.user_id, &context.agent_id)
+            .await?;
+        tool_result(json!({ "policy": policy, "rules": rules }))
+    }
+
+    async fn get_wallet_policy_rule(&self, args: Value, context: &RequestContext) -> Result<Value> {
+        context.require_scope("policy:read")?;
+        let args: PolicyRuleIdArgs = serde_json::from_value(args)?;
+        let policy = self.require_policy(args.policy_id, context).await?;
+        let rule = self
+            .require_policy_rule(args.rule_id, args.policy_id, context)
+            .await?;
+        let provider_rule = match rule.provider_rule_id.as_deref() {
+            Some(provider_rule_id) => Some(
+                self.privy
+                    .get_policy_rule(&policy.provider_policy_id, provider_rule_id)
+                    .await?,
+            ),
+            None => None,
+        };
+        tool_result(json!({ "policy": policy, "rule": rule, "provider_rule": provider_rule }))
+    }
+
+    async fn update_wallet_policy_rule(
+        &self,
+        args: Value,
+        context: &RequestContext,
+    ) -> Result<Value> {
+        context.require_scope("policy:rule:update")?;
+        let args: UpdateWalletPolicyRuleArgs = serde_json::from_value(args)?;
+        let policy = self.require_policy(args.policy_id, context).await?;
+        let rule = self
+            .require_policy_rule(args.rule_id, args.policy_id, context)
+            .await?;
+        let provider_rule_id = rule
+            .provider_rule_id
+            .as_deref()
+            .ok_or_else(|| anyhow!("rule has no provider_rule_id"))?;
+        validate_rule_json(&args.rule)?;
+        let provider_rule = self
+            .privy
+            .update_policy_rule(
+                &policy.provider_policy_id,
+                provider_rule_id,
+                args.rule.clone(),
+            )
+            .await?;
+        let updated_provider_rule_id =
+            extract_optional_string(&provider_rule, &["id", "rule_id"]).or(rule.provider_rule_id);
+        self.store
+            .update_policy_rule_for_agent(
+                args.rule_id,
+                args.policy_id,
+                &context.user_id,
+                &context.agent_id,
+                updated_provider_rule_id.as_deref(),
+                &args.rule,
+                args.status.as_deref().unwrap_or(&rule.status),
+            )
+            .await?;
+        let updated = self
+            .require_policy_rule(args.rule_id, args.policy_id, context)
+            .await?;
+        self.audit_policy_success(
+            context,
+            Some(&policy),
+            Some(&updated),
+            "policy_rule_updated",
+        )
+        .await;
+        tool_result(json!({ "rule": updated, "provider_rule": provider_rule }))
+    }
+
+    async fn delete_wallet_policy_rule(
+        &self,
+        args: Value,
+        context: &RequestContext,
+    ) -> Result<Value> {
+        context.require_scope("policy:rule:delete")?;
+        let args: DeletePolicyRuleArgs = serde_json::from_value(args)?;
+        require_delete_confirmation(&args.confirm_delete, "delete policy rule")?;
+        let policy = self.require_policy(args.policy_id, context).await?;
+        let rule = self
+            .require_policy_rule(args.rule_id, args.policy_id, context)
+            .await?;
+        let provider_response = match rule.provider_rule_id.as_deref() {
+            Some(provider_rule_id) => {
+                self.privy
+                    .delete_policy_rule(&policy.provider_policy_id, provider_rule_id)
+                    .await?
+            }
+            None => json!({}),
+        };
+        self.store
+            .delete_policy_rule_for_agent(
+                args.rule_id,
+                args.policy_id,
+                &context.user_id,
+                &context.agent_id,
+            )
+            .await?;
+        self.audit_policy_success(context, Some(&policy), Some(&rule), "policy_rule_deleted")
+            .await;
+        tool_result(json!({ "deleted": true, "provider_response": provider_response }))
+    }
+
+    async fn attach_policy_to_wallet(
+        &self,
+        args: Value,
+        context: &RequestContext,
+    ) -> Result<Value> {
+        context.require_scope("policy:attach")?;
+        let args: WalletPolicyLinkArgs = serde_json::from_value(args)?;
+        let wallet = self.require_wallet(args.wallet_id, context).await?;
+        let policy = self.require_policy(args.policy_id, context).await?;
+        ensure_privy_wallet(&wallet)?;
+        ensure_privy_policy(&policy)?;
+        if policy.status != "active" {
+            return Err(anyhow!("policy is not active"));
+        }
+
+        self.store
+            .attach_policy_to_wallet(wallet.id, policy.id, &context.user_id, &context.agent_id)
+            .await?;
+        let policies = self
+            .store
+            .list_wallet_policies(wallet.id, &context.user_id, &context.agent_id)
+            .await?;
+        let provider_policy_ids = provider_policy_ids(&policies);
+        let provider_wallet = self
+            .privy
+            .update_wallet(&wallet.provider_wallet_id, &provider_policy_ids)
+            .await?;
+        self.store
+            .update_wallet_policy_ids(
+                wallet.id,
+                &context.user_id,
+                &context.agent_id,
+                &provider_policy_ids,
+            )
+            .await?;
+        self.audit_policy_success(context, Some(&policy), None, "policy_attached")
+            .await;
+        tool_result(
+            json!({ "wallet_id": wallet.id, "policies": policies, "provider_wallet": provider_wallet }),
+        )
+    }
+
+    async fn detach_policy_from_wallet(
+        &self,
+        args: Value,
+        context: &RequestContext,
+    ) -> Result<Value> {
+        context.require_scope("policy:detach")?;
+        let args: WalletPolicyLinkArgs = serde_json::from_value(args)?;
+        let wallet = self.require_wallet(args.wallet_id, context).await?;
+        let policy = self.require_policy(args.policy_id, context).await?;
+        ensure_privy_wallet(&wallet)?;
+        ensure_privy_policy(&policy)?;
+
+        self.store
+            .detach_policy_from_wallet(wallet.id, policy.id, &context.user_id, &context.agent_id)
+            .await?;
+        let policies = self
+            .store
+            .list_wallet_policies(wallet.id, &context.user_id, &context.agent_id)
+            .await?;
+        let provider_policy_ids = provider_policy_ids(&policies);
+        let provider_wallet = self
+            .privy
+            .update_wallet(&wallet.provider_wallet_id, &provider_policy_ids)
+            .await?;
+        self.store
+            .update_wallet_policy_ids(
+                wallet.id,
+                &context.user_id,
+                &context.agent_id,
+                &provider_policy_ids,
+            )
+            .await?;
+        self.audit_policy_success(context, Some(&policy), None, "policy_detached")
+            .await;
+        tool_result(
+            json!({ "wallet_id": wallet.id, "policies": policies, "provider_wallet": provider_wallet }),
+        )
+    }
+
+    async fn list_wallet_policies_for_wallet(
+        &self,
+        args: Value,
+        context: &RequestContext,
+    ) -> Result<Value> {
+        context.require_scope("policy:read")?;
+        let args: WalletIdArgs = serde_json::from_value(args)?;
+        let wallet = self.require_wallet(args.wallet_id, context).await?;
+        let policies = self
+            .store
+            .list_wallet_policies(wallet.id, &context.user_id, &context.agent_id)
+            .await?;
+        tool_result(json!({ "wallet": wallet, "policies": policies }))
+    }
+
     async fn require_wallet(&self, wallet_id: i64, context: &RequestContext) -> Result<Wallet> {
         self.store
             .get_by_id_for_agent(wallet_id, &context.user_id, &context.agent_id)
@@ -346,7 +856,30 @@ impl ToolService {
             .ok_or_else(|| anyhow!("wallet not found for authenticated user and agent"))
     }
 
-    async fn audit_success(
+    async fn require_policy(
+        &self,
+        policy_id: i64,
+        context: &RequestContext,
+    ) -> Result<WalletPolicy> {
+        self.store
+            .get_policy_for_agent(policy_id, &context.user_id, &context.agent_id)
+            .await?
+            .ok_or_else(|| anyhow!("policy not found for authenticated user and agent"))
+    }
+
+    async fn require_policy_rule(
+        &self,
+        rule_id: i64,
+        policy_id: i64,
+        context: &RequestContext,
+    ) -> Result<WalletPolicyRule> {
+        self.store
+            .get_policy_rule_for_agent(rule_id, policy_id, &context.user_id, &context.agent_id)
+            .await?
+            .ok_or_else(|| anyhow!("policy rule not found for authenticated user and agent"))
+    }
+
+    async fn audit_wallet_success(
         &self,
         context: &RequestContext,
         wallet: Option<&Wallet>,
@@ -367,6 +900,28 @@ impl ToolService {
             )
             .await;
     }
+
+    async fn audit_policy_success(
+        &self,
+        context: &RequestContext,
+        policy: Option<&WalletPolicy>,
+        rule: Option<&WalletPolicyRule>,
+        action: &str,
+    ) {
+        let _ = self
+            .store
+            .record_policy_audit(
+                &context.user_id,
+                &context.agent_id,
+                policy,
+                rule,
+                action,
+                context.request_id.as_deref(),
+                "succeeded",
+                None,
+            )
+            .await;
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -378,7 +933,7 @@ struct ToolCall {
 
 #[derive(Debug, Deserialize)]
 struct CreateAgentWalletArgs {
-    policy_template: Option<String>,
+    policy_id: i64,
     label: Option<String>,
 }
 
@@ -422,25 +977,64 @@ struct TransactionArgs {
     transaction_id: String,
 }
 
-struct PolicyTemplate {
-    name: &'static str,
-    caip2: String,
-    max_native_units_per_tx: String,
+#[derive(Debug, Deserialize)]
+struct CreateWalletPolicyArgs {
+    policy: Value,
+    metadata: Option<Value>,
+    status: Option<String>,
 }
 
-impl PolicyTemplate {
-    fn resolve(name: Option<&str>) -> Result<Self> {
-        match name.unwrap_or("base-small-spend") {
-            "base-small-spend" => Ok(Self {
-                name: "base-small-spend",
-                caip2: env::var("VAULT_DEFAULT_CAIP2")
-                    .unwrap_or_else(|_| "eip155:2345".to_string()),
-                max_native_units_per_tx: env::var("VAULT_DEFAULT_MAX_NATIVE_UNITS")
-                    .unwrap_or_else(|_| "10000000000000".to_string()), // 0.00001 BTC or 0.00001 ETH
-            }),
-            other => Err(anyhow!("unknown policy_template '{other}'")),
-        }
-    }
+#[derive(Debug, Deserialize)]
+struct UpdateWalletPolicyArgs {
+    policy_id: i64,
+    policy: Value,
+    status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PolicyIdArgs {
+    policy_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateWalletPolicyRuleArgs {
+    policy_id: i64,
+    rule: Value,
+    metadata: Option<Value>,
+    status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateWalletPolicyRuleArgs {
+    policy_id: i64,
+    rule_id: i64,
+    rule: Value,
+    status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PolicyRuleIdArgs {
+    policy_id: i64,
+    rule_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeletePolicyArgs {
+    policy_id: i64,
+    confirm_delete: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeletePolicyRuleArgs {
+    policy_id: i64,
+    rule_id: i64,
+    confirm_delete: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WalletPolicyLinkArgs {
+    wallet_id: i64,
+    policy_id: i64,
 }
 
 fn ensure_privy_wallet(wallet: &Wallet) -> Result<()> {
@@ -454,36 +1048,80 @@ fn ensure_privy_wallet(wallet: &Wallet) -> Result<()> {
     }
 }
 
-fn default_policy(agent_id: &str, chain_id: &str, max_native_units: &str) -> Value {
-    json!({
-        "version": "1.0",
-        "name": format!("clawup-{agent_id}"),
-        "chain_type": "ethereum",
-        "rules": [
-            {
-                "name": "max native units per transaction",
-                "method": "eth_sendTransaction",
-                "conditions": [{
-                    "field_source": "ethereum_transaction",
-                    "field": "value",
-                    "operator": "lte",
-                    "value": max_native_units,
-                }],
-                "action": "ALLOW"
-            },
-            {
-                "name": "allowed chain",
-                "method": "eth_sendTransaction",
-                "conditions": [{
-                    "field_source": "ethereum_transaction",
-                    "field": "chain_id",
-                    "operator": "eq",
-                    "value": chain_id
-                }],
-                "action": "ALLOW"
-            }
-        ]
-    })
+fn ensure_privy_policy(policy: &WalletPolicy) -> Result<()> {
+    if policy.provider == PRIVY_PROVIDER {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "unsupported policy provider '{}'; expected privy",
+            policy.provider
+        ))
+    }
+}
+
+fn provider_policy_ids(policies: &[WalletPolicy]) -> Vec<String> {
+    policies
+        .iter()
+        .filter(|policy| policy.provider == PRIVY_PROVIDER && policy.status == "active")
+        .map(|policy| policy.provider_policy_id.clone())
+        .collect()
+}
+
+fn validate_policy_json(policy: &Value) -> Result<(String, String)> {
+    let object = policy
+        .as_object()
+        .ok_or_else(|| anyhow!("policy must be a JSON object"))?;
+    require_field(object, "version")?;
+    let name = require_string_field(object, "name")?;
+    let chain_type = require_string_field(object, "chain_type")?;
+    let rules = object
+        .get("rules")
+        .ok_or_else(|| anyhow!("policy.rules is required"))?;
+    if !rules.is_array() {
+        return Err(anyhow!("policy.rules must be an array"));
+    }
+    Ok((name.to_string(), chain_type.to_string()))
+}
+
+fn validate_rule_json(rule: &Value) -> Result<()> {
+    let object = rule
+        .as_object()
+        .ok_or_else(|| anyhow!("rule must be a JSON object"))?;
+    require_string_field(object, "name")?;
+    require_string_field(object, "method")?;
+    let conditions = object
+        .get("conditions")
+        .ok_or_else(|| anyhow!("rule.conditions is required"))?;
+    if !conditions.is_array() {
+        return Err(anyhow!("rule.conditions must be an array"));
+    }
+    require_string_field(object, "action")?;
+    Ok(())
+}
+
+fn require_field<'a>(object: &'a Map<String, Value>, name: &str) -> Result<&'a Value> {
+    object
+        .get(name)
+        .ok_or_else(|| anyhow!("{name} is required"))
+}
+
+fn require_string_field<'a>(object: &'a Map<String, Value>, name: &str) -> Result<&'a str> {
+    require_field(object, name)?
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow!("{name} must be a non-empty string"))
+}
+
+fn is_policy_tool(name: &str) -> bool {
+    name.contains("policy")
+}
+
+fn require_delete_confirmation(actual: &str, expected: &str) -> Result<()> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(anyhow!("confirm_delete must equal '{expected}'"))
+    }
 }
 
 fn extract_string(value: &Value, keys: &[&str]) -> Result<String> {
