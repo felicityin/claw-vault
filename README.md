@@ -201,13 +201,15 @@ curl \
     "method": "tools/call",
     "params": {
       "name": "create_agent_wallet",
-      "arguments": {}
+      "arguments": {
+        "chain_type": "ethereum"
+      }
     }
   }' \
   http://127.0.0.1:8080/mcp
 ```
 
-When `policy_id` is omitted, the server creates a default Privy policy and stores its default rules before creating the wallet. The default policy includes:
+When `policy_id` is omitted, the server creates a default Privy policy and stores its default rules before creating the wallet. `chain_type` is optional and defaults to `ethereum`; automatic default policy creation currently supports `ethereum` only. The default policy includes:
 
 ```text
 max native units per transaction <= VAULT_DEFAULT_MAX_NATIVE_UNITS
@@ -222,7 +224,8 @@ To use a custom policy instead, create it with `create_wallet_policy`, then pass
 {
   "name": "create_agent_wallet",
   "arguments": {
-    "policy_id": 1
+    "policy_id": 1,
+    "chain_type": "ethereum"
   }
 }
 ```

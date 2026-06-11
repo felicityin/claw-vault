@@ -35,7 +35,8 @@ impl ToolService {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "policy_id": {"type": "integer"}
+                        "policy_id": {"type": "integer"},
+                        "chain_type": {"type": "string", "default": "ethereum"}
                     },
                     "required": []
                 }
@@ -348,14 +349,20 @@ impl ToolService {
     async fn create_agent_wallet(&self, args: Value, context: &RequestContext) -> Result<Value> {
         context.require_scope("wallet:create")?;
         let args: CreateAgentWalletArgs = serde_json::from_value(args)?;
-        let (policy, policy_rules, caip2, chain_type) = match args.policy_id {
+        let chain_type = normalize_wallet_chain_type(args.chain_type.as_deref())?;
+        let (policy, policy_rules, caip2) = match args.policy_id {
             Some(policy_id) => {
                 let policy = self.require_policy(policy_id, context).await?;
                 ensure_privy_policy(&policy)?;
                 if policy.status != "active" {
                     return Err(anyhow!("policy is not active"));
                 }
-                let chain_type = policy.chain_type.clone();
+                if policy.chain_type != chain_type {
+                    return Err(anyhow!(
+                        "chain_type is '{chain_type}' but policy chain_type is '{}'",
+                        policy.chain_type
+                    ));
+                }
                 if let Some(wallet) = self
                     .find_wallet_for_chain_type(context, &chain_type)
                     .await?
@@ -375,10 +382,14 @@ impl ToolService {
                     }));
                 }
                 let caip2 = policy_caip2(&policy);
-                (policy, Vec::new(), caip2, chain_type)
+                (policy, Vec::new(), caip2)
             }
             None => {
-                let chain_type = "ethereum".to_string();
+                if chain_type != "ethereum" {
+                    return Err(anyhow!(
+                        "default wallet policy creation only supports chain_type 'ethereum'; pass policy_id for other chain types"
+                    ));
+                }
                 if let Some(wallet) = self
                     .find_wallet_for_chain_type(context, &chain_type)
                     .await?
@@ -401,7 +412,7 @@ impl ToolService {
                 let (policy, rules) = self
                     .create_default_policy(context, caip2.clone(), chain_id, max_native_units)
                     .await?;
-                (policy, rules, Some(caip2), chain_type)
+                (policy, rules, Some(caip2))
             }
         };
 
@@ -1067,6 +1078,7 @@ struct ToolCall {
 #[derive(Debug, Deserialize)]
 struct CreateAgentWalletArgs {
     policy_id: Option<i64>,
+    chain_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1167,6 +1179,14 @@ struct DeletePolicyRuleArgs {
 struct WalletPolicyLinkArgs {
     wallet_id: i64,
     policy_id: i64,
+}
+
+fn normalize_wallet_chain_type(chain_type: Option<&str>) -> Result<String> {
+    let chain_type = chain_type.unwrap_or("ethereum").trim();
+    if chain_type.is_empty() {
+        return Err(anyhow!("chain_type must not be empty"));
+    }
+    Ok(chain_type.to_ascii_lowercase())
 }
 
 fn default_policy_settings() -> Result<(String, String, String)> {
