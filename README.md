@@ -208,11 +208,16 @@ curl \
   http://127.0.0.1:8080/mcp
 ```
 
-When `policy_id` is omitted, the server creates a default Privy policy and stores its default rules before creating the wallet. `chain_type` is optional and defaults to `ethereum`; automatic default policy creation currently supports `ethereum` only. The default policy includes:
+When `policy_id` is omitted, the server creates a default Privy policy for the requested `chain_type` before creating the wallet. `chain_type` is optional and defaults to `ethereum`.
+
+Default policy behavior:
 
 ```text
-max native units per transaction <= VAULT_DEFAULT_MAX_NATIVE_UNITS
+ethereum: max native units per transaction <= VAULT_DEFAULT_MAX_NATIVE_UNITS
+other chain_type values: deny all transactions by default
 ```
+
+For non-`ethereum` chain types, use the policy/rule tools to replace or relax the default deny-all rules before expecting the wallet to transact.
 
 If the same authenticated `user_id + agent_id` already has a wallet for that Privy `chain_type`, `create_agent_wallet` returns the existing wallet address with `existing: true` and does not create another Privy wallet. Otherwise, the response includes internal `policy.id`, `policy_rules`, and `wallet.id`. Use `wallet.id` for later wallet operations.
 

@@ -385,11 +385,6 @@ impl ToolService {
                 (policy, Vec::new(), caip2)
             }
             None => {
-                if chain_type != "ethereum" {
-                    return Err(anyhow!(
-                        "default wallet policy creation only supports chain_type 'ethereum'; pass policy_id for other chain types"
-                    ));
-                }
                 if let Some(wallet) = self
                     .find_wallet_for_chain_type(context, &chain_type)
                     .await?
@@ -408,10 +403,7 @@ impl ToolService {
                         "existing": true
                     }));
                 }
-                let max_native_units = default_max_native_units()?;
-                let (policy, rules) = self
-                    .create_default_policy(context, max_native_units)
-                    .await?;
+                let (policy, rules) = self.create_default_policy(context, &chain_type).await?;
                 (policy, rules, None)
             }
         };
@@ -456,10 +448,16 @@ impl ToolService {
     async fn create_default_policy(
         &self,
         context: &RequestContext,
-        max_native_units: String,
+        chain_type: &str,
     ) -> Result<(WalletPolicy, Vec<WalletPolicyRule>)> {
-        let rules = default_policy_rules(&max_native_units);
-        let policy_json = default_policy(&context.agent_id, rules.clone());
+        let (rules, mut metadata) = default_policy_template(chain_type)?;
+        if let Some(metadata) = metadata.as_object_mut() {
+            metadata.insert(
+                "request_id".to_string(),
+                json!(context.request_id.as_deref()),
+            );
+        }
+        let policy_json = default_policy(&context.agent_id, chain_type, rules.clone());
         let (name, chain_type) = validate_policy_json(&policy_json)?;
         let provider_policy = self.privy.create_policy(policy_json.clone()).await?;
         let provider_policy_id = extract_string(&provider_policy, &["id", "policy_id"])?;
@@ -474,11 +472,7 @@ impl ToolService {
                 chain_type,
                 policy_json,
                 status: "active".to_string(),
-                metadata: json!({
-                    "default": true,
-                    "max_native_units_per_tx": max_native_units,
-                    "request_id": context.request_id,
-                }),
+                metadata,
             })
             .await?;
 
@@ -1193,27 +1187,52 @@ fn default_max_native_units() -> Result<String> {
     Ok(max_native_units)
 }
 
-fn default_policy(agent_id: &str, rules: Vec<Value>) -> Value {
+fn default_policy(agent_id: &str, chain_type: &str, rules: Vec<Value>) -> Value {
     json!({
         "version": "1.0",
-        "name": format!("clawup-default-{agent_id}"),
-        "chain_type": "ethereum",
+        "name": format!("clawup-default-{chain_type}-{agent_id}"),
+        "chain_type": chain_type,
         "rules": rules
     })
 }
 
-fn default_policy_rules(max_native_units: &str) -> Vec<Value> {
-    vec![json!({
-        "name": "max native units per transaction",
-        "method": "eth_sendTransaction",
-        "conditions": [{
-            "field_source": "ethereum_transaction",
-            "field": "value",
-            "operator": "lte",
-            "value": max_native_units,
-        }],
-        "action": "ALLOW"
-    })]
+fn default_policy_template(chain_type: &str) -> Result<(Vec<Value>, Value)> {
+    if chain_type == "ethereum" {
+        let max_native_units = default_max_native_units()?;
+        return Ok((
+            vec![json!({
+                "name": "max native units per transaction",
+                "method": "eth_sendTransaction",
+                "conditions": [{
+                    "field_source": "ethereum_transaction",
+                    "field": "value",
+                    "operator": "lte",
+                    "value": max_native_units,
+                }],
+                "action": "ALLOW"
+            })],
+            json!({
+                "default": true,
+                "chain_type": chain_type,
+                "template": "ethereum-max-native-units",
+                "max_native_units_per_tx": max_native_units,
+            }),
+        ));
+    }
+
+    Ok((
+        vec![json!({
+            "name": "deny all transactions by default",
+            "method": "*",
+            "conditions": [],
+            "action": "DENY"
+        })],
+        json!({
+            "default": true,
+            "chain_type": chain_type,
+            "template": "deny-all",
+        }),
+    ))
 }
 
 fn policy_caip2(policy: &WalletPolicy) -> Option<String> {
