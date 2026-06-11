@@ -408,11 +408,11 @@ impl ToolService {
                         "existing": true
                     }));
                 }
-                let (caip2, chain_id, max_native_units) = default_policy_settings()?;
+                let max_native_units = default_max_native_units()?;
                 let (policy, rules) = self
-                    .create_default_policy(context, caip2.clone(), chain_id, max_native_units)
+                    .create_default_policy(context, max_native_units)
                     .await?;
-                (policy, rules, Some(caip2))
+                (policy, rules, None)
             }
         };
 
@@ -456,11 +456,9 @@ impl ToolService {
     async fn create_default_policy(
         &self,
         context: &RequestContext,
-        caip2: String,
-        chain_id: String,
         max_native_units: String,
     ) -> Result<(WalletPolicy, Vec<WalletPolicyRule>)> {
-        let rules = default_policy_rules(&chain_id, &max_native_units);
+        let rules = default_policy_rules(&max_native_units);
         let policy_json = default_policy(&context.agent_id, rules.clone());
         let (name, chain_type) = validate_policy_json(&policy_json)?;
         let provider_policy = self.privy.create_policy(policy_json.clone()).await?;
@@ -478,7 +476,6 @@ impl ToolService {
                 status: "active".to_string(),
                 metadata: json!({
                     "default": true,
-                    "caip2": caip2,
                     "max_native_units_per_tx": max_native_units,
                     "request_id": context.request_id,
                 }),
@@ -1189,15 +1186,11 @@ fn normalize_wallet_chain_type(chain_type: Option<&str>) -> Result<String> {
     Ok(chain_type.to_ascii_lowercase())
 }
 
-fn default_policy_settings() -> Result<(String, String, String)> {
-    let caip2 = env::var("VAULT_DEFAULT_CAIP2").unwrap_or_else(|_| "eip155:2345".to_string());
-    validate_allowed_caip2(&caip2)?;
-    let chain_id = chain_id_from_caip2(&caip2)?;
-    // 0.00001 BTC or 0.00001 ETH in native units (satoshi or wei)
+fn default_max_native_units() -> Result<String> {
     let max_native_units =
         env::var("VAULT_DEFAULT_MAX_NATIVE_UNITS").unwrap_or_else(|_| "10000000000000".to_string());
     validate_native_units_decimal(&max_native_units)?;
-    Ok((caip2, chain_id, max_native_units))
+    Ok(max_native_units)
 }
 
 fn default_policy(agent_id: &str, rules: Vec<Value>) -> Value {
@@ -1209,31 +1202,18 @@ fn default_policy(agent_id: &str, rules: Vec<Value>) -> Value {
     })
 }
 
-fn default_policy_rules(chain_id: &str, max_native_units: &str) -> Vec<Value> {
-    vec![
-        json!({
-            "name": "max native units per transaction",
-            "method": "eth_sendTransaction",
-            "conditions": [{
-                "field_source": "ethereum_transaction",
-                "field": "value",
-                "operator": "lte",
-                "value": max_native_units,
-            }],
-            "action": "ALLOW"
-        }),
-        json!({
-            "name": "allowed chain",
-            "method": "eth_sendTransaction",
-            "conditions": [{
-                "field_source": "ethereum_transaction",
-                "field": "chain_id",
-                "operator": "eq",
-                "value": chain_id
-            }],
-            "action": "ALLOW"
-        }),
-    ]
+fn default_policy_rules(max_native_units: &str) -> Vec<Value> {
+    vec![json!({
+        "name": "max native units per transaction",
+        "method": "eth_sendTransaction",
+        "conditions": [{
+            "field_source": "ethereum_transaction",
+            "field": "value",
+            "operator": "lte",
+            "value": max_native_units,
+        }],
+        "action": "ALLOW"
+    })]
 }
 
 fn policy_caip2(policy: &WalletPolicy) -> Option<String> {

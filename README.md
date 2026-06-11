@@ -63,7 +63,6 @@ Optional:
 ```sh
 export PRIVY_API_BASE_URL=https://api.privy.io/v1
 export VAULT_ALLOWED_CAIP2=eip155:2345,eip155:48816
-export VAULT_DEFAULT_CAIP2=eip155:2345
 export VAULT_DEFAULT_MAX_NATIVE_UNITS=10000000000000 # 0.00001 BTC or 0.00001 ETH
 export VAULT_TRANSPORT=stdio
 export VAULT_HTTP_BIND=0.0.0.0:8080
@@ -213,10 +212,9 @@ When `policy_id` is omitted, the server creates a default Privy policy and store
 
 ```text
 max native units per transaction <= VAULT_DEFAULT_MAX_NATIVE_UNITS
-allowed chain == VAULT_DEFAULT_CAIP2
 ```
 
-`VAULT_DEFAULT_CAIP2` must be included in `VAULT_ALLOWED_CAIP2`. If the same authenticated `user_id + agent_id` already has a wallet for that Privy `chain_type`, `create_agent_wallet` returns the existing wallet address with `existing: true` and does not create another Privy wallet. Otherwise, the response includes internal `policy.id`, `policy_rules`, and `wallet.id`. Use `wallet.id` for later wallet operations.
+If the same authenticated `user_id + agent_id` already has a wallet for that Privy `chain_type`, `create_agent_wallet` returns the existing wallet address with `existing: true` and does not create another Privy wallet. Otherwise, the response includes internal `policy.id`, `policy_rules`, and `wallet.id`. Use `wallet.id` for later wallet operations.
 
 To use a custom policy instead, create it with `create_wallet_policy`, then pass the internal `policy_id` to `create_agent_wallet`:
 
