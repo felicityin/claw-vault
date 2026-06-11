@@ -91,7 +91,21 @@
         },
         {
           "name": "VAULT_ALLOWED_CAIP2",
-          "description": "Comma-separated CAIP-2 chain allowlist for transaction submission",
+          "description": "Comma-separated CAIP-2 chain allowlist for transaction submission and default policy chain validation",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "VAULT_DEFAULT_CAIP2",
+          "description": "Default CAIP-2 chain for auto-created wallet policies; must be included in VAULT_ALLOWED_CAIP2",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "VAULT_DEFAULT_MAX_NATIVE_UNITS",
+          "description": "Default maximum native-chain units per transaction for auto-created wallet policies",
           "isRequired": false,
           "format": "string",
           "isSecret": false
