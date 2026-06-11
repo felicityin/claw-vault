@@ -348,36 +348,18 @@ impl ToolService {
     async fn create_agent_wallet(&self, args: Value, context: &RequestContext) -> Result<Value> {
         context.require_scope("wallet:create")?;
         let args: CreateAgentWalletArgs = serde_json::from_value(args)?;
-        let (policy, policy_rules, caip2) = match args.policy_id {
+        let (policy, policy_rules, caip2, chain_type) = match args.policy_id {
             Some(policy_id) => {
                 let policy = self.require_policy(policy_id, context).await?;
                 ensure_privy_policy(&policy)?;
                 if policy.status != "active" {
                     return Err(anyhow!("policy is not active"));
                 }
-                let caip2 = policy_caip2(&policy);
-                if let Some(caip2) = &caip2 {
-                    if let Some(wallet) = self.find_wallet_for_caip2(context, caip2).await? {
-                        self.audit_wallet_success(
-                            context,
-                            Some(&wallet),
-                            "create_agent_wallet_existing",
-                            None,
-                        )
-                        .await;
-                        return tool_result(json!({
-                            "wallet": wallet,
-                            "address": wallet.address,
-                            "caip2": caip2,
-                            "existing": true
-                        }));
-                    }
-                }
-                (policy, Vec::new(), caip2)
-            }
-            None => {
-                let (caip2, chain_id, max_native_units) = default_policy_settings()?;
-                if let Some(wallet) = self.find_wallet_for_caip2(context, &caip2).await? {
+                let chain_type = policy.chain_type.clone();
+                if let Some(wallet) = self
+                    .find_wallet_for_chain_type(context, &chain_type)
+                    .await?
+                {
                     self.audit_wallet_success(
                         context,
                         Some(&wallet),
@@ -388,19 +370,43 @@ impl ToolService {
                     return tool_result(json!({
                         "wallet": wallet,
                         "address": wallet.address,
-                        "caip2": caip2,
+                        "chain_type": chain_type,
                         "existing": true
                     }));
                 }
+                let caip2 = policy_caip2(&policy);
+                (policy, Vec::new(), caip2, chain_type)
+            }
+            None => {
+                let chain_type = "ethereum".to_string();
+                if let Some(wallet) = self
+                    .find_wallet_for_chain_type(context, &chain_type)
+                    .await?
+                {
+                    self.audit_wallet_success(
+                        context,
+                        Some(&wallet),
+                        "create_agent_wallet_existing",
+                        None,
+                    )
+                    .await;
+                    return tool_result(json!({
+                        "wallet": wallet,
+                        "address": wallet.address,
+                        "chain_type": chain_type,
+                        "existing": true
+                    }));
+                }
+                let (caip2, chain_id, max_native_units) = default_policy_settings()?;
                 let (policy, rules) = self
                     .create_default_policy(context, caip2.clone(), chain_id, max_native_units)
                     .await?;
-                (policy, rules, Some(caip2))
+                (policy, rules, Some(caip2), chain_type)
             }
         };
 
         let policy_ids = vec![policy.provider_policy_id.clone()];
-        let provider_wallet = self.privy.create_wallet("ethereum", &policy_ids).await?;
+        let provider_wallet = self.privy.create_wallet(&chain_type, &policy_ids).await?;
         let provider_wallet_id = extract_string(&provider_wallet, &["id", "wallet_id"])?;
         let address = extract_string(&provider_wallet, &["address"])?;
 
@@ -412,7 +418,7 @@ impl ToolService {
                 provider: PRIVY_PROVIDER.to_string(),
                 provider_wallet_id,
                 address,
-                chain_type: "ethereum".to_string(),
+                chain_type,
                 policy_ids,
                 metadata: json!({
                     "caip2": caip2,
@@ -502,34 +508,18 @@ impl ToolService {
         Ok((policy, stored_rules))
     }
 
-    async fn find_wallet_for_caip2(
+    async fn find_wallet_for_chain_type(
         &self,
         context: &RequestContext,
-        caip2: &str,
+        chain_type: &str,
     ) -> Result<Option<Wallet>> {
         let wallets = self
             .store
             .list_for_agent(&context.user_id, &context.agent_id)
             .await?;
-        for wallet in wallets {
-            if wallet.provider != PRIVY_PROVIDER || wallet.chain_type != "ethereum" {
-                continue;
-            }
-            if wallet_caip2(&wallet).as_deref() == Some(caip2) {
-                return Ok(Some(wallet));
-            }
-            let policies = self
-                .store
-                .list_wallet_policies(wallet.id, &context.user_id, &context.agent_id)
-                .await?;
-            if policies
-                .iter()
-                .any(|policy| policy_caip2(policy).as_deref() == Some(caip2))
-            {
-                return Ok(Some(wallet));
-            }
-        }
-        Ok(None)
+        Ok(wallets
+            .into_iter()
+            .find(|wallet| wallet.provider == PRIVY_PROVIDER && wallet.chain_type == chain_type))
     }
 
     async fn list_agent_wallets(&self, args: Value, context: &RequestContext) -> Result<Value> {
@@ -1224,15 +1214,6 @@ fn default_policy_rules(chain_id: &str, max_native_units: &str) -> Vec<Value> {
             "action": "ALLOW"
         }),
     ]
-}
-
-fn wallet_caip2(wallet: &Wallet) -> Option<String> {
-    wallet
-        .metadata
-        .get("caip2")
-        .and_then(Value::as_str)
-        .filter(|caip2| !caip2.trim().is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn policy_caip2(policy: &WalletPolicy) -> Option<String> {
