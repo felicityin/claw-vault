@@ -1,3 +1,5 @@
+use std::env;
+
 use anyhow::{Result, anyhow};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -29,14 +31,14 @@ impl ToolService {
         vec![
             json!({
                 "name": "create_agent_wallet",
-                "description": "Create a Privy wallet for the authenticated user and agent using an owned active policy.",
+                "description": "Create a Privy wallet for the authenticated user and agent. If policy_id is omitted, a default policy with guardrail rules is created and attached.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "policy_id": {"type": "integer"},
                         "label": {"type": "string"}
                     },
-                    "required": ["policy_id"]
+                    "required": []
                 }
             }),
             json!({
@@ -347,11 +349,17 @@ impl ToolService {
     async fn create_agent_wallet(&self, args: Value, context: &RequestContext) -> Result<Value> {
         context.require_scope("wallet:create")?;
         let args: CreateAgentWalletArgs = serde_json::from_value(args)?;
-        let policy = self.require_policy(args.policy_id, context).await?;
-        ensure_privy_policy(&policy)?;
-        if policy.status != "active" {
-            return Err(anyhow!("policy is not active"));
-        }
+        let (policy, policy_rules) = match args.policy_id {
+            Some(policy_id) => {
+                let policy = self.require_policy(policy_id, context).await?;
+                ensure_privy_policy(&policy)?;
+                if policy.status != "active" {
+                    return Err(anyhow!("policy is not active"));
+                }
+                (policy, Vec::new())
+            }
+            None => self.create_default_policy(context).await?,
+        };
 
         let policy_ids = vec![policy.provider_policy_id.clone()];
         let provider_wallet = self.privy.create_wallet("ethereum", &policy_ids).await?;
@@ -385,8 +393,73 @@ impl ToolService {
         tool_result(json!({
             "wallet": wallet,
             "policy": policy,
+            "policy_rules": policy_rules,
             "provider_wallet": provider_wallet
         }))
+    }
+
+    async fn create_default_policy(
+        &self,
+        context: &RequestContext,
+    ) -> Result<(WalletPolicy, Vec<WalletPolicyRule>)> {
+        let (caip2, chain_id, max_native_units) = default_policy_settings()?;
+        let rules = default_policy_rules(&chain_id, &max_native_units);
+        let policy_json = default_policy(&context.agent_id, rules.clone());
+        let (name, chain_type) = validate_policy_json(&policy_json)?;
+        let provider_policy = self.privy.create_policy(policy_json.clone()).await?;
+        let provider_policy_id = extract_string(&provider_policy, &["id", "policy_id"])?;
+        let policy = self
+            .store
+            .create_policy(NewWalletPolicy {
+                user_id: context.user_id.clone(),
+                agent_id: context.agent_id.clone(),
+                provider: PRIVY_PROVIDER.to_string(),
+                provider_policy_id: provider_policy_id.clone(),
+                name,
+                chain_type,
+                policy_json,
+                status: "active".to_string(),
+                metadata: json!({
+                    "default": true,
+                    "caip2": caip2,
+                    "max_native_units_per_tx": max_native_units,
+                    "request_id": context.request_id,
+                }),
+            })
+            .await?;
+
+        let provider_rules = provider_policy.get("rules").and_then(Value::as_array);
+        let mut stored_rules = Vec::with_capacity(rules.len());
+        for (index, rule_json) in rules.into_iter().enumerate() {
+            let provider_rule_id = provider_rules
+                .and_then(|rules| rules.get(index))
+                .and_then(|rule| extract_optional_string(rule, &["id", "rule_id"]));
+            let rule = self
+                .store
+                .create_policy_rule(NewWalletPolicyRule {
+                    policy_id: policy.id,
+                    user_id: context.user_id.clone(),
+                    agent_id: context.agent_id.clone(),
+                    provider: PRIVY_PROVIDER.to_string(),
+                    provider_policy_id: provider_policy_id.clone(),
+                    provider_rule_id,
+                    rule_json,
+                    status: "active".to_string(),
+                    metadata: json!({
+                        "default": true,
+                        "rule_index": index,
+                        "request_id": context.request_id,
+                    }),
+                })
+                .await?;
+            self.audit_policy_success(context, Some(&policy), Some(&rule), "policy_rule_created")
+                .await;
+            stored_rules.push(rule);
+        }
+
+        self.audit_policy_success(context, Some(&policy), None, "policy_created")
+            .await;
+        Ok((policy, stored_rules))
     }
 
     async fn list_agent_wallets(&self, args: Value, context: &RequestContext) -> Result<Value> {
@@ -933,7 +1006,7 @@ struct ToolCall {
 
 #[derive(Debug, Deserialize)]
 struct CreateAgentWalletArgs {
-    policy_id: i64,
+    policy_id: Option<i64>,
     label: Option<String>,
 }
 
@@ -1035,6 +1108,53 @@ struct DeletePolicyRuleArgs {
 struct WalletPolicyLinkArgs {
     wallet_id: i64,
     policy_id: i64,
+}
+
+fn default_policy_settings() -> Result<(String, String, String)> {
+    let caip2 = env::var("VAULT_DEFAULT_CAIP2").unwrap_or_else(|_| "eip155:2345".to_string());
+    validate_allowed_caip2(&caip2)?;
+    let chain_id = chain_id_from_caip2(&caip2)?;
+    // 0.00001 BTC or 0.00001 ETH in native units (satoshi or wei)
+    let max_native_units =
+        env::var("VAULT_DEFAULT_MAX_NATIVE_UNITS").unwrap_or_else(|_| "10000000000000".to_string());
+    validate_native_units_decimal(&max_native_units)?;
+    Ok((caip2, chain_id, max_native_units))
+}
+
+fn default_policy(agent_id: &str, rules: Vec<Value>) -> Value {
+    json!({
+        "version": "1.0",
+        "name": format!("clawup-default-{agent_id}"),
+        "chain_type": "ethereum",
+        "rules": rules
+    })
+}
+
+fn default_policy_rules(chain_id: &str, max_native_units: &str) -> Vec<Value> {
+    vec![
+        json!({
+            "name": "max native units per transaction",
+            "method": "eth_sendTransaction",
+            "conditions": [{
+                "field_source": "ethereum_transaction",
+                "field": "value",
+                "operator": "lte",
+                "value": max_native_units,
+            }],
+            "action": "ALLOW"
+        }),
+        json!({
+            "name": "allowed chain",
+            "method": "eth_sendTransaction",
+            "conditions": [{
+                "field_source": "ethereum_transaction",
+                "field": "chain_id",
+                "operator": "eq",
+                "value": chain_id
+            }],
+            "action": "ALLOW"
+        }),
+    ]
 }
 
 fn ensure_privy_wallet(wallet: &Wallet) -> Result<()> {

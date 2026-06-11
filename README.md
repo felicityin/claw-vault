@@ -63,6 +63,8 @@ Optional:
 ```sh
 export PRIVY_API_BASE_URL=https://api.privy.io/v1
 export VAULT_ALLOWED_CAIP2=eip155:2345,eip155:48816
+export VAULT_DEFAULT_CAIP2=eip155:2345
+export VAULT_DEFAULT_MAX_NATIVE_UNITS=10000000000000 # 0.00001 BTC or 0.00001 ETH
 export VAULT_TRANSPORT=stdio
 export VAULT_HTTP_BIND=0.0.0.0:8080
 export VAULT_DB_MAX_CONNECTIONS=5
@@ -187,7 +189,7 @@ curl \
   http://127.0.0.1:8080/mcp
 ```
 
-Create a policy for the authenticated `user_id + agent_id` context:
+Create a wallet for the authenticated `user_id + agent_id` context:
 
 ```sh
 curl \
@@ -198,48 +200,8 @@ curl \
     "id": 1,
     "method": "tools/call",
     "params": {
-      "name": "create_wallet_policy",
-      "arguments": {
-        "policy": {
-          "version": "1.0",
-          "name": "GOAT small spend",
-          "chain_type": "ethereum",
-          "rules": [
-            {
-              "name": "max native units per transaction",
-              "method": "eth_sendTransaction",
-              "conditions": [{
-                "field_source": "ethereum_transaction",
-                "field": "value",
-                "operator": "lte",
-                "value": "10000000000000"
-              }],
-              "action": "ALLOW"
-            }
-          ]
-        }
-      }
-    }
-  }' \
-  http://127.0.0.1:8080/mcp
-```
-
-The response includes an internal `policy.id`. Use that value to create a wallet.
-
-Create a wallet with the internal `policy_id`:
-
-```sh
-curl \
-  -H 'x-api-key: dev-secret' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 2,
-    "method": "tools/call",
-    "params": {
       "name": "create_agent_wallet",
       "arguments": {
-        "policy_id": 1,
         "label": "primary-goat-wallet"
       }
     }
@@ -247,7 +209,26 @@ curl \
   http://127.0.0.1:8080/mcp
 ```
 
-The response includes an internal `wallet.id`. Use that value for later wallet operations.
+When `policy_id` is omitted, the server creates a default Privy policy and stores its default rules before creating the wallet. The default policy includes:
+
+```text
+max native units per transaction <= VAULT_DEFAULT_MAX_NATIVE_UNITS
+allowed chain == VAULT_DEFAULT_CAIP2
+```
+
+`VAULT_DEFAULT_CAIP2` must be included in `VAULT_ALLOWED_CAIP2`. The response includes internal `policy.id`, `policy_rules`, and `wallet.id`. Use `wallet.id` for later wallet operations.
+
+To use a custom policy instead, create it with `create_wallet_policy`, then pass the internal `policy_id` to `create_agent_wallet`:
+
+```json
+{
+  "name": "create_agent_wallet",
+  "arguments": {
+    "policy_id": 1,
+    "label": "primary-custom-wallet"
+  }
+}
+```
 
 Tool calls that operate on a wallet use the internal `wallet_id` from the `wallets.id` column. They do not accept Privy's wallet id directly. The service loads the wallet with:
 
