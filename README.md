@@ -216,7 +216,7 @@ max native units per transaction <= VAULT_DEFAULT_MAX_NATIVE_UNITS
 allowed chain == VAULT_DEFAULT_CAIP2
 ```
 
-`VAULT_DEFAULT_CAIP2` must be included in `VAULT_ALLOWED_CAIP2`. The response includes internal `policy.id`, `policy_rules`, and `wallet.id`. Use `wallet.id` for later wallet operations.
+`VAULT_DEFAULT_CAIP2` must be included in `VAULT_ALLOWED_CAIP2`. If the same authenticated `user_id + agent_id` already has a wallet for that CAIP-2 chain, `create_agent_wallet` returns the existing wallet address with `existing: true` and does not create another Privy wallet. Otherwise, the response includes internal `policy.id`, `policy_rules`, and `wallet.id`. Use `wallet.id` for later wallet operations.
 
 To use a custom policy instead, create it with `create_wallet_policy`, then pass the internal `policy_id` to `create_agent_wallet`:
 
