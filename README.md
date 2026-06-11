@@ -201,9 +201,7 @@ curl \
     "method": "tools/call",
     "params": {
       "name": "create_agent_wallet",
-      "arguments": {
-        "label": "primary-goat-wallet"
-      }
+      "arguments": {}
     }
   }' \
   http://127.0.0.1:8080/mcp
@@ -224,8 +222,7 @@ To use a custom policy instead, create it with `create_wallet_policy`, then pass
 {
   "name": "create_agent_wallet",
   "arguments": {
-    "policy_id": 1,
-    "label": "primary-custom-wallet"
+    "policy_id": 1
   }
 }
 ```

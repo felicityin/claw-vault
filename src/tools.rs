@@ -35,8 +35,7 @@ impl ToolService {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "policy_id": {"type": "integer"},
-                        "label": {"type": "string"}
+                        "policy_id": {"type": "integer"}
                     },
                     "required": []
                 }
@@ -416,7 +415,6 @@ impl ToolService {
                 chain_type: "ethereum".to_string(),
                 policy_ids,
                 metadata: json!({
-                    "label": args.label,
                     "caip2": caip2,
                     "request_id": context.request_id,
                 }),
@@ -1079,7 +1077,6 @@ struct ToolCall {
 #[derive(Debug, Deserialize)]
 struct CreateAgentWalletArgs {
     policy_id: Option<i64>,
-    label: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
